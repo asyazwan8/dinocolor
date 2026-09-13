@@ -142,6 +142,41 @@ describe("capture pipeline, hostile conditions", () => {
     expect(canonicalError(result.imageFromCanvas, truth)).toBeLessThan(4);
   });
 
+  /**
+   * One edge foreshortened far harder than the others - a phone tilted left or
+   * right over the sheet.
+   *
+   * This case drove two fixes. The probe band used to be sized from the shortest
+   * edge in the quad, leaving the long edges searched far too narrowly; and the
+   * probe chose its candidate purely by proximity, which cannot separate the border
+   * from a block of crayon when the model predicting the position is still tens of
+   * pixels out. Candidates are now filtered by how well their thickness matches the
+   * border's known width first. Before the fix this sat around 49px of error while
+   * cheerfully reporting every edge found.
+   */
+  it("stays sub-pixel when one edge is foreshortened by nearly a fifth", async () => {
+    const { photo, truth } = await shoot({
+      warp: [[0, 0], [-120, 91], [-120, -85], [3, 2]],
+    });
+    const result = captureFromFrame(photo);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(canonicalError(result.imageFromCanvas, truth)).toBeLessThan(2);
+    expect(Math.min(...result.boxEdgeConfidence)).toBeGreaterThan(0.9);
+  });
+
+  it("refuses an angle too steep to trust, rather than guessing", async () => {
+    const { photo } = await shoot({
+      warp: [[0, 0], [-260, 198], [-260, -185], [3, 2]],
+    });
+    const result = captureFromFrame(photo);
+
+    // The failure mode that matters: past its limit it must decline, not return a
+    // confident answer that puts the border through the middle of the drawing.
+    expect(result.ok).toBe(false);
+  });
+
   it("survives warm indoor light, blur and sensor noise together", async () => {
     const { photo, truth } = await shoot({
       warp: [[46, 22], [-30, -14], [-38, 18], [34, -8]],

@@ -43,6 +43,7 @@ export interface CaptureSuccess {
   imageFromCanvas: Mat3;
   metrics: QualityMetrics;
   boxConfidence: number;
+  boxEdgeConfidence: number[];
   qrDisagreement: number;
   white: WhitePoint | null;
 }
@@ -116,8 +117,25 @@ export function captureFromFrame(
     return fail({ kind: "degenerate" }, { code: qr.code, boxCorners: wide.corners });
   }
 
-  const box =
-    refineBoxCorners(gray, firstPass, { ...options.box, searchRadiusFraction: 0.02 }) ?? wide;
+  // Two tightening passes, not one. The first pass corrects most of the coarse
+  // error but is still fitting from a model that was wrong by a good fraction of the
+  // sheet, so a single narrow pass can start outside its own search band on a steeply
+  // angled shot. Each pass re-solves before narrowing again.
+  let box = wide;
+  let model = firstPass;
+  for (const fraction of [0.05, 0.018]) {
+    const refined = refineBoxCorners(gray, model, {
+      ...options.box,
+      searchRadiusFraction: fraction,
+    });
+    // A pass that fails is skipped rather than ending the loop: a narrower band can
+    // still succeed where a wider one picked up a competing edge.
+    if (!refined) continue;
+    const next = solveHomography(BOX_OUTER_CANVAS_CORNERS, refined.corners);
+    if (!next) continue;
+    box = refined;
+    model = next;
+  }
 
   const imageFromCanvas = solveHomography(BOX_OUTER_CANVAS_CORNERS, box.corners);
   if (!imageFromCanvas) {
@@ -169,6 +187,7 @@ export function captureFromFrame(
     imageFromCanvas,
     metrics: verdict.metrics,
     boxConfidence: box.confidence,
+    boxEdgeConfidence: box.edgeConfidence,
     qrDisagreement: disagreement,
     white,
   };
