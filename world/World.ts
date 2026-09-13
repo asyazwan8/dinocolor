@@ -27,8 +27,12 @@ const WALK_SPEED = 58;
  * scanning and seeing their own dinosaur is the moment the whole installation is
  * judged on. At an ambling pace a big rig is barely a nose at the edge after four
  * seconds. It enters at a trot and settles once it is properly in view.
+ *
+ * The pace is tied to how wide the art is: a rig spawns just off screen, so a wider
+ * dinosaur starts further out and takes longer to arrive. Redrawing the art wider is
+ * enough to make arrivals feel slow again.
  */
-const ENTRY_SPEED = 2.6;
+const ENTRY_SPEED = 3.4;
 
 /** Fallback in seconds, so a slow lane cannot leave a dinosaur entering forever. */
 const ENTRY_TIMEOUT = 7;
@@ -49,7 +53,9 @@ interface LiveDino {
   untilChange: number;
   bornAt: number;
   scale: number;
-  halfWidth: number;
+  /** Stage pixels from the dinosaur's position to each edge of its artwork. */
+  reachLeft: number;
+  reachRight: number;
 }
 
 export interface WorldOptions {
@@ -123,9 +129,14 @@ export class World {
     holder.scale.set(scale);
 
     const shadow = new Graphics();
-    const rigWidth = Math.max(...parts.map((p) => p.part.box.x + p.part.box.w));
+    const span = rig.extent.right - rig.extent.left;
     shadow
-      .ellipse(0, rig.footDrop - 6, rigWidth * 0.34, rigWidth * 0.075)
+      .ellipse(
+        (rig.extent.left + rig.extent.right) / 2,
+        rig.footDrop - 6,
+        span * 0.3,
+        span * 0.062,
+      )
       .fill({ color: 0x24361f, alpha: 0.26 });
 
     holder.addChild(shadow);
@@ -139,12 +150,18 @@ export class World {
     holder.zIndex = laneSpec.baseline;
 
     const facing: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
-    const halfWidth = (rigWidth * scale) / 2;
+
+    // Facing flips the artwork, so which way the rig reaches flips with it.
+    const reachLeft = Math.abs(facing === 1 ? rig.extent.left : rig.extent.right) * scale;
+    const reachRight = Math.abs(facing === 1 ? rig.extent.right : rig.extent.left) * scale;
+
+    // Spawn with the leading edge just past the frame, so the dinosaur is visible
+    // almost immediately rather than after walking its own length first.
     const x =
       startAt === undefined
         ? facing === 1
-          ? -halfWidth
-          : STAGE.w + halfWidth
+          ? -reachRight
+          : STAGE.w + reachLeft
         : startAt * STAGE.w;
 
     const live: LiveDino = {
@@ -161,7 +178,8 @@ export class World {
       untilChange: ENTRY_TIMEOUT,
       bornAt: performance.now(),
       scale,
-      halfWidth,
+      reachLeft,
+      reachRight,
     };
 
     this.dinoLayer.addChild(holder);
@@ -225,7 +243,7 @@ export class World {
 
     switch (dino.behaviour) {
       case "enter": {
-        const inside = dino.x > dino.halfWidth && dino.x < STAGE.w - dino.halfWidth;
+        const inside = dino.x - dino.reachLeft > 0 && dino.x + dino.reachRight < STAGE.w;
         if (inside || dino.untilChange <= 0) {
           dino.behaviour = "wander";
           dino.targetSpeed = 0.85 + Math.random() * 0.3;
@@ -246,8 +264,8 @@ export class World {
           }
         }
         // Turn back rather than walk off the edge unbidden.
-        if (dino.x < dino.halfWidth * 0.5) dino.facing = 1;
-        if (dino.x > STAGE.w - dino.halfWidth * 0.5) dino.facing = -1;
+        if (dino.x - dino.reachLeft < 0) dino.facing = 1;
+        if (dino.x + dino.reachRight > STAGE.w) dino.facing = -1;
         break;
       }
       case "browse": {
@@ -261,8 +279,8 @@ export class World {
       case "exit": {
         const gone =
           dino.facing === 1
-            ? dino.x > STAGE.w + dino.halfWidth * 1.4
-            : dino.x < -dino.halfWidth * 1.4;
+            ? dino.x - dino.reachLeft > STAGE.w
+            : dino.x + dino.reachRight < 0;
         if (gone) {
           this.remove(dino);
           return;

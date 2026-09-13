@@ -1,20 +1,37 @@
-/** Warm late-morning valley. Layers get hazier and bluer with distance. */
+/**
+ * Soft painterly valley: pale layered blues receding into haze, rolling greens,
+ * conifers with yellow ginkgo among them, a flower meadow up front.
+ *
+ * The palette is deliberately low-contrast and high-key. The dinosaurs carry a
+ * child's crayon, which is saturated and dark, so the world has to sit back and let
+ * them read - a scene painted at the same intensity would swallow them.
+ */
 export const PALETTE = {
-  skyTop: "#5fb0dd",
-  skyMid: "#9bd3ec",
-  skyHorizon: "#e4f1f4",
-  sun: "#fff6d8",
+  skyTop: "#a3d2ef",
+  skyMid: "#cbe6f4",
+  skyHorizon: "#fdf4de",
+  sun: "#fff6dc",
+  cloud: "#ffffff",
+  cloudWarm: "#ffe8d8",
 
-  mountainFar: "#93a9c6",
-  mountainNear: "#7d95b6",
-  hills: "#7fa57e",
-  treeline: "#4b8158",
+  /** Farthest to nearest. Each band steps toward green and away from haze. */
+  mountains: ["#b9cee4", "#a3bedb", "#8fb0d2", "#86aec3"],
+  hills: ["#8fbf94", "#9ecb84", "#aed68c"],
 
-  groundFar: "#8fb86e",
-  groundNear: "#6d9a55",
-  foreground: "#2d5738",
+  conifer: "#4d8b5c",
+  coniferFar: "#7ba98a",
+  ginkgo: "#efd648",
+  ginkgoFar: "#e7dc94",
+  trunk: "#8a6b4f",
 
-  shadow: "rgba(38, 54, 34, 0.30)",
+  groundFar: "#b6d98c",
+  groundNear: "#a5cd6e",
+  meadow: "#bcdc7e",
+  flowerPink: "#f3a8c2",
+  flowerWhite: "#fff6f2",
+  flowerOrange: "#f6ad55",
+
+  shadow: "rgba(64, 92, 56, 0.26)",
 } as const;
 
 /** Virtual stage. Everything is authored here and scaled to fit the display. */
@@ -52,3 +69,12 @@ export const LANES: Lane[] = [
  */
 export const REFERENCE_TREE_HEIGHT = 300;
 export const REFERENCE_TREE_LANE = 2;
+
+/** Blend two hex colours. Used to fade distant layers into the haze. */
+export function mixHex(from: string, to: string, t: number): string {
+  const parse = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const [r1, g1, b1] = parse(from);
+  const [r2, g2, b2] = parse(to);
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * t);
+  return `rgb(${mix(r1, r2)}, ${mix(g1, g2)}, ${mix(b1, b2)})`;
+}

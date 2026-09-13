@@ -40,6 +40,14 @@ export class DinoRig {
   readonly container = new Container();
   /** Canonical pixels from the root pivot down to the feet. */
   readonly footDrop: number;
+  /**
+   * Horizontal extent in canonical pixels, measured FROM THE ROOT PIVOT, which is
+   * where the rig is positioned from. The pivot sits inside the body, nowhere near
+   * the middle of the artwork - a Triceratops reaches much further forward, into its
+   * frill and horns, than it does back into its tail. Callers that need to know when
+   * the animal is off screen have to use these, not half the artwork's width.
+   */
+  readonly extent: { left: number; right: number };
 
   private readonly bones: Bone[] = [];
   private readonly root: Bone;
@@ -85,6 +93,11 @@ export class DinoRig {
 
     this.footDrop =
       Math.max(...parts.map((p) => p.part.box.y + p.part.box.h)) - root.part.pivot.y;
+
+    this.extent = {
+      left: Math.min(...parts.map((p) => p.part.box.x)) - root.part.pivot.x,
+      right: Math.max(...parts.map((p) => p.part.box.x + p.part.box.w)) - root.part.pivot.x,
+    };
   }
 
   /** Parents before children, so a bone's parent transform is always already solved. */

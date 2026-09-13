@@ -4,122 +4,130 @@
 
     Every path in #parts is a riggable body part. data-pivot is the joint it rotates
     about, in canonical texture pixels; data-parent is its bone parent; data-z is the
-    draw order back to front. scripts/buildRig.ts reads this one file and emits the
+    draw order back to front. scripts/buildRig.mjs reads this one file and emits the
     rig JSON, the line-art layer and the per-part alpha masks.
 
-    Parts overlap at joints on purpose: fills are opaque white, so draw order occludes
-    the seam in print and the same ordering hides it at runtime. Keep joint overlap
-    modest - anything hidden here is unpainted if a rotation later reveals it.
+    The pose is natural, so limbs overlap. That is fine and intended: fills are opaque
+    white, so draw order occludes the seams in print and the same ordering hides them
+    at runtime.
 
-    The QR occupies (1040,640)-(1160,760) plus a 20px quiet zone. Nothing may be drawn
-    inside x>=1020 AND y>=620. The head clears it by sitting high; the legs by
-    stopping well to the left.
+    THE TUCK RULE. Area hidden beneath another part never gets coloured, so it is bare
+    white if a rotation later reveals it. Rotation is about the pivot, so a point d
+    above the pivot sweeps about d*sin(theta) sideways. DinoRig swings legs at
+    theta <= 0.42 rad, so a leg top 100px above its pivot moves ~41px. Every limb
+    therefore tucks ~100px past its pivot into the body, which keeps the swept area
+    comfortably covered. If the swing amplitude in world/DinoRig.ts changes, this
+    overlap has to change with it.
+
+    The QR occupies (1040,640)-(1160,760) plus a 20px quiet zone, so nothing may be
+    drawn inside x>=1020 AND y>=620. The head clears it by sitting high.
   -->
   <g id="parts" fill="#ffffff" stroke="#111111" stroke-width="7"
      stroke-linejoin="round" stroke-linecap="round">
-    <path id="part-legRearFar" data-parent="body" data-pivot="288,452" data-z="0"
-      d="M 240,474
-         Q 244,444 279,442
-         Q 318,440 328,472
-         C 336,508 328,553 325,594
-         C 323,620 327,641 327,650
-         C 327,661 313,668 293,668
-         C 274,668 260,661 260,650
-         C 260,638 262,618 260,594
-         C 255,553 240,508 240,474
-         Z"/>
 
-    <path id="part-legFrontFar" data-parent="body" data-pivot="534,452" data-z="1"
-      d="M 486,474
-         Q 490,444 525,442
-         Q 564,440 574,472
-         C 582,508 574,553 571,594
-         C 569,620 573,641 573,650
-         C 573,661 559,668 539,668
-         C 520,668 506,661 506,650
-         C 506,638 508,618 506,594
-         C 501,553 486,508 486,474
-         Z"/>
+    <path id="part-legRearFar" data-parent="body" data-pivot="360,500" data-z="0"
+      d="M 312,452
+         C 306,414 320,402 356,402
+         C 392,402 410,414 408,452
+         C 404,492 396,530 394,570
+         C 392,596 400,612 400,626
+         C 402,640 380,648 356,648
+         C 334,648 320,640 320,626
+         C 320,612 322,596 320,570
+         C 318,530 314,492 312,452 Z"/>
 
-    <path id="part-tail" data-parent="body" data-pivot="266,392" data-z="2"
-      d="M 262,344 C 214,338 154,352 106,376 C 80,388 64,404 66,416
-         C 78,422 104,416 128,412 C 180,404 234,412 270,428
-         C 284,400 278,368 262,344 Z"/>
+    <path id="part-legFrontFar" data-parent="body" data-pivot="650,500" data-z="1"
+      d="M 602,452
+         C 596,414 610,402 646,402
+         C 682,402 700,414 698,452
+         C 694,492 686,530 684,570
+         C 682,596 690,612 690,626
+         C 692,640 670,648 646,648
+         C 624,648 610,640 610,626
+         C 610,612 612,596 610,570
+         C 608,530 604,492 602,452 Z"/>
 
-    <path id="part-body" data-parent="" data-pivot="450,380" data-z="3"
-      d="M 240,400 C 246,336 284,296 348,278 C 432,256 528,258 598,282
-         C 638,296 662,324 668,358 C 674,400 664,446 642,472
-         C 570,494 400,498 296,484 C 256,476 234,444 240,400 Z"/>
+    <path id="part-tail" data-parent="body" data-pivot="310,440" data-z="2"
+      d="M 316,368 C 256,372 184,420 122,478 C 78,518 44,556 42,572
+         C 56,582 96,562 134,540 C 206,498 276,478 332,488
+         C 346,448 340,398 316,368 Z"/>
 
-    <path id="part-frill" data-parent="body" data-pivot="706,418" data-z="4"
-      d="M 660,424 C 632,382 624,322 636,268 C 650,216 680,176 722,156
-         A 27,27 0 0 1 774,150 A 27,27 0 0 1 826,162
-         A 27,27 0 0 1 866,194 C 886,224 894,268 892,312
-         C 890,352 880,388 864,412 C 830,434 772,438 726,432
-         C 698,428 674,427 660,424 Z"/>
+    <path id="part-body" data-parent="" data-pivot="500,400" data-z="3"
+      d="M 262,456
+         C 254,382 292,300 380,258 C 470,216 606,214 698,260
+         C 756,290 794,342 804,402 C 812,456 794,510 762,548
+         C 676,584 418,588 318,556 C 280,542 264,504 262,456 Z"/>
 
-    <path id="part-head" data-parent="frill" data-pivot="800,340" data-z="5"
-      d="M 792,262 C 814,244 840,236 864,238
-         C 880,212 906,186 934,170 C 946,163 954,164 954,172
-         C 954,186 938,208 916,228 C 906,237 896,244 888,250
-         C 906,248 924,250 938,256
-         C 950,232 970,208 992,194 C 1002,188 1009,190 1008,199
-         C 1006,213 992,234 974,252
-         C 984,262 994,276 1000,292
-         C 1006,278 1014,270 1020,274 C 1022,284 1016,298 1008,308
-         C 1014,322 1016,338 1012,350
-         C 1020,358 1024,370 1019,380 C 1012,392 996,398 980,395
-         C 966,392 956,384 950,372
-         C 914,388 866,400 820,400 C 792,400 774,386 770,360
-         C 762,326 762,288 792,262 Z"/>
+    <path id="part-frill" data-parent="body" data-pivot="742,420" data-z="4"
+      d="M 716,466 C 690,422 680,352 696,290 C 712,226 756,178 816,156
+         A 27,27 0 0 1 868,150 A 27,27 0 0 1 918,163
+         A 27,27 0 0 1 958,196 A 27,27 0 0 1 982,246
+         C 998,302 996,370 974,426 C 950,474 896,498 836,494
+         C 786,490 740,484 716,466 Z"/>
 
-    <path id="part-legRearNear" data-parent="body" data-pivot="416,458" data-z="6"
-      d="M 362,478
-         Q 366,444 406,442
-         Q 450,440 462,476
-         C 470,516 462,566 458,612
-         C 456,640 460,664 460,674
-         C 460,686 444,694 422,694
-         C 400,694 384,686 384,674
-         C 384,660 386,638 384,612
-         C 378,566 362,516 362,478
-         Z"/>
+    <path id="part-head" data-parent="frill" data-pivot="880,370" data-z="5"
+      d="M 852,300
+         C 880,266 918,248 956,250
+         C 986,214 1040,178 1082,172
+         C 1076,198 1044,240 1008,268
+         C 1026,272 1044,278 1058,288
+         C 1090,254 1132,216 1162,210
+         C 1154,238 1124,282 1094,310
+         C 1106,322 1114,338 1116,354
+         C 1126,348 1136,352 1137,363
+         C 1138,378 1126,393 1112,400
+         C 1115,418 1109,435 1095,445
+         C 1079,457 1056,458 1040,449
+         C 1026,441 1018,429 1015,416
+         C 982,441 936,458 890,461
+         C 856,463 834,446 827,417
+         C 818,379 826,332 852,300 Z"/>
 
-    <path id="part-legFrontNear" data-parent="body" data-pivot="662,458" data-z="7"
-      d="M 608,478
-         Q 612,444 652,442
-         Q 696,440 708,476
-         C 716,516 708,566 704,612
-         C 702,640 706,664 706,674
-         C 706,686 690,694 668,694
-         C 646,694 630,686 630,674
-         C 630,660 632,638 630,612
-         C 624,566 608,516 608,478
-         Z"/>
+    <path id="part-legRearNear" data-parent="body" data-pivot="448,516" data-z="6"
+      d="M 390,472
+         C 384,428 404,396 444,392
+         C 486,390 508,422 506,472
+         C 502,516 492,556 490,600
+         C 488,628 498,644 498,652
+         C 500,668 474,678 446,678
+         C 420,678 402,668 402,652
+         C 402,644 404,628 402,600
+         C 398,556 392,516 390,472 Z"/>
+
+    <path id="part-legFrontNear" data-parent="body" data-pivot="738,516" data-z="7"
+      d="M 680,472
+         C 674,428 694,396 734,392
+         C 776,390 798,422 796,472
+         C 792,516 782,556 780,600
+         C 778,628 788,644 788,652
+         C 790,668 764,678 736,678
+         C 710,678 692,668 692,652
+         C 692,644 694,628 692,600
+         C 688,556 682,516 680,472 Z"/>
   </g>
 
   <!--
     Interior detail. Drawn into the line-art layer only, never into the masks, so a
-    child gets an eye and toes to colour around without those lines cutting the
-    silhouette into extra pieces.
+    child gets an eye, hooves and frill ridges to colour around without those lines
+    cutting the silhouette into extra pieces.
   -->
   <g id="details" fill="none" stroke="#111111" stroke-width="5"
      stroke-linejoin="round" stroke-linecap="round">
-    <circle cx="884" cy="302" r="12" fill="#111111" stroke="none"/>
-    <path d="M 998,320 C 1004,316 1010,319 1011,325"/>
-    <path d="M 956,362 C 970,370 984,373 998,371"/>
-    <path d="M 800,286 C 824,268 852,260 878,264"/>
+    <circle cx="938" cy="344" r="13" fill="#111111" stroke="none"/>
+    <path d="M 1092,372 C 1098,367 1106,370 1107,377"/>
+    <path d="M 1026,418 C 1046,428 1068,431 1086,427"/>
+    <path d="M 860,348 C 884,326 914,316 942,320"/>
 
-    <path d="M 720,208 C 746,188 776,180 808,184"/>
-    <path d="M 690,274 C 722,252 760,242 800,246"/>
-    <path d="M 684,342 C 714,322 750,314 788,318"/>
-    <path d="M 694,398 C 720,386 748,381 776,383"/>
+    <path d="M 806,196 C 838,172 874,164 910,172"/>
+    <path d="M 762,270 C 800,242 846,232 892,240"/>
+    <path d="M 744,354 C 782,332 826,324 868,330"/>
+    <path d="M 750,432 C 784,416 820,410 854,414"/>
 
-    <path d="M 275,650 L 275,664 M 293,650 L 293,664 M 312,650 L 312,664"/>
-    <path d="M 521,650 L 521,664 M 539,650 L 539,664 M 558,650 L 558,664"/>
-    <path d="M 401,676 L 401,690 M 422,676 L 422,690 M 443,676 L 443,690"/>
-    <path d="M 647,676 L 647,690 M 668,676 L 668,690 M 689,676 L 689,690"/>
+    <path d="M 336,624 L 336,642 M 358,624 L 358,642 M 380,624 L 380,642"/>
+    <path d="M 626,624 L 626,642 M 648,624 L 648,642 M 670,624 L 670,642"/>
+    <path d="M 424,654 L 424,672 M 446,654 L 446,672 M 468,654 L 468,672"/>
+    <path d="M 714,654 L 714,672 M 736,654 L 736,672 M 758,654 L 758,672"/>
 
-    <path d="M 144,392 C 184,384 226,386 260,396"/>
+    <path d="M 168,486 C 220,462 274,450 322,454"/>
   </g>
 </svg>
