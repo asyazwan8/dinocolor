@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800">
+  <!--
+    Dino Colourise - Triceratops colouring line art AND rig source.
+
+    Every path in #parts is a riggable body part. data-pivot is the joint it rotates
+    about, in canonical texture pixels; data-parent is its bone parent; data-z is the
+    draw order back to front. scripts/buildRig.ts reads this one file and emits the
+    rig JSON, the line-art layer and the per-part alpha masks.
+
+    Parts overlap at joints on purpose: fills are opaque white, so draw order occludes
+    the seam in print and the same ordering hides it at runtime. Keep joint overlap
+    modest - anything hidden here is unpainted if a rotation later reveals it.
+
+    The QR occupies (1040,640)-(1160,760) plus a 20px quiet zone. Nothing may be drawn
+    inside x>=1020 AND y>=620. The head clears it by sitting high; the legs by
+    stopping well to the left.
+  -->
+  <g id="parts" fill="#ffffff" stroke="#111111" stroke-width="7"
+     stroke-linejoin="round" stroke-linecap="round">
+    <path id="part-legRearFar" data-parent="body" data-pivot="288,430" data-z="0"
+      d="M 254,418 C 244,450 241,498 248,542 C 254,580 261,620 264,646
+         C 265,660 274,668 288,668 C 304,668 317,661 318,649
+         C 320,633 313,621 311,605 C 309,571 315,529 324,496
+         C 332,464 335,442 331,426 Z"/>
+
+    <path id="part-legFrontFar" data-parent="body" data-pivot="524,430" data-z="1"
+      d="M 490,418 C 480,450 477,498 484,542 C 490,580 497,620 500,646
+         C 501,660 510,668 524,668 C 540,668 553,661 554,649
+         C 556,633 549,621 547,605 C 545,571 551,529 560,496
+         C 568,464 571,442 567,426 Z"/>
+
+    <path id="part-tail" data-parent="body" data-pivot="266,392" data-z="2"
+      d="M 262,344 C 214,338 154,352 106,376 C 80,388 64,404 66,416
+         C 78,422 104,416 128,412 C 180,404 234,412 270,428
+         C 284,400 278,368 262,344 Z"/>
+
+    <path id="part-body" data-parent="" data-pivot="450,380" data-z="3"
+      d="M 240,400 C 246,336 284,296 348,278 C 432,256 528,258 598,282
+         C 638,296 662,324 668,358 C 674,400 664,446 642,472
+         C 570,494 400,498 296,484 C 256,476 234,444 240,400 Z"/>
+
+    <path id="part-frill" data-parent="body" data-pivot="706,418" data-z="4"
+      d="M 660,424 C 632,382 624,322 636,268 C 650,216 680,176 722,156
+         A 27,27 0 0 1 774,150 A 27,27 0 0 1 826,162
+         A 27,27 0 0 1 866,194 C 886,224 894,268 892,312
+         C 890,352 880,388 864,412 C 830,434 772,438 726,432
+         C 698,428 674,427 660,424 Z"/>
+
+    <path id="part-head" data-parent="frill" data-pivot="800,340" data-z="5"
+      d="M 792,262 C 814,244 840,236 864,238
+         C 880,212 906,186 934,170 C 946,163 954,164 954,172
+         C 954,186 938,208 916,228 C 906,237 896,244 888,250
+         C 906,248 924,250 938,256
+         C 950,232 970,208 992,194 C 1002,188 1009,190 1008,199
+         C 1006,213 992,234 974,252
+         C 984,262 994,276 1000,292
+         C 1006,278 1014,270 1020,274 C 1022,284 1016,298 1008,308
+         C 1014,322 1016,338 1012,350
+         C 1020,358 1024,370 1019,380 C 1012,392 996,398 980,395
+         C 966,392 956,384 950,372
+         C 914,388 866,400 820,400 C 792,400 774,386 770,360
+         C 762,326 762,288 792,262 Z"/>
+
+    <path id="part-legRearNear" data-parent="body" data-pivot="416,440" data-z="6"
+      d="M 358,414 C 344,448 340,500 350,548 C 358,590 368,634 372,664
+         C 374,680 386,692 406,692 C 428,692 446,684 448,670
+         C 450,652 440,638 438,616 C 436,578 444,530 456,492
+         C 468,456 472,430 466,412 Z"/>
+
+    <path id="part-legFrontNear" data-parent="body" data-pivot="652,440" data-z="7"
+      d="M 594,414 C 580,448 576,500 586,548 C 594,590 604,634 608,664
+         C 610,680 622,692 642,692 C 664,692 682,684 684,670
+         C 686,652 676,638 674,616 C 672,578 680,530 692,492
+         C 704,456 708,430 702,412 Z"/>
+  </g>
+
+  <!--
+    Interior detail. Drawn into the line-art layer only, never into the masks, so a
+    child gets an eye and toes to colour around without those lines cutting the
+    silhouette into extra pieces.
+  -->
+  <g id="details" fill="none" stroke="#111111" stroke-width="5"
+     stroke-linejoin="round" stroke-linecap="round">
+    <circle cx="884" cy="302" r="12" fill="#111111" stroke="none"/>
+    <path d="M 998,320 C 1004,316 1010,319 1011,325"/>
+    <path d="M 956,362 C 970,370 984,373 998,371"/>
+    <path d="M 800,286 C 824,268 852,260 878,264"/>
+
+    <path d="M 720,208 C 746,188 776,180 808,184"/>
+    <path d="M 690,274 C 722,252 760,242 800,246"/>
+    <path d="M 684,342 C 714,322 750,314 788,318"/>
+    <path d="M 694,398 C 720,386 748,381 776,383"/>
+
+    <path d="M 276,652 L 276,666 M 290,654 L 290,668 M 304,652 L 304,666"/>
+    <path d="M 512,652 L 512,666 M 526,654 L 526,668 M 540,652 L 540,666"/>
+    <path d="M 390,676 L 390,690 M 410,678 L 410,692 M 430,676 L 430,690"/>
+    <path d="M 626,676 L 626,690 M 646,678 L 646,692 M 666,676 L 666,690"/>
+
+    <path d="M 300,468 C 400,490 520,490 630,468"/>
+    <path d="M 144,392 C 184,384 226,386 260,396"/>
+  </g>
+</svg>

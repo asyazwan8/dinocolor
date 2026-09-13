@@ -1,0 +1,145 @@
+{
+  "slug": "triceratops",
+  "texture": {
+    "w": 1200,
+    "h": 800
+  },
+  "parts": [
+    {
+      "id": "legRearFar",
+      "parent": "body",
+      "pivot": {
+        "x": 288,
+        "y": 430
+      },
+      "z": 0,
+      "box": {
+        "x": 230,
+        "y": 404,
+        "w": 116,
+        "h": 277
+      },
+      "mask": "/assets/masks/triceratops/legRearFar.png",
+      "lineart": "/assets/lineart/triceratops/legRearFar.png"
+    },
+    {
+      "id": "legFrontFar",
+      "parent": "body",
+      "pivot": {
+        "x": 524,
+        "y": 430
+      },
+      "z": 1,
+      "box": {
+        "x": 466,
+        "y": 404,
+        "w": 116,
+        "h": 277
+      },
+      "mask": "/assets/masks/triceratops/legFrontFar.png",
+      "lineart": "/assets/lineart/triceratops/legFrontFar.png"
+    },
+    {
+      "id": "tail",
+      "parent": "body",
+      "pivot": {
+        "x": 266,
+        "y": 392
+      },
+      "z": 2,
+      "box": {
+        "x": 52,
+        "y": 329,
+        "w": 240,
+        "h": 113
+      },
+      "mask": "/assets/masks/triceratops/tail.png",
+      "lineart": "/assets/lineart/triceratops/tail.png"
+    },
+    {
+      "id": "body",
+      "parent": null,
+      "pivot": {
+        "x": 450,
+        "y": 380
+      },
+      "z": 3,
+      "box": {
+        "x": 225,
+        "y": 249,
+        "w": 458,
+        "h": 257
+      },
+      "mask": "/assets/masks/triceratops/body.png",
+      "lineart": "/assets/lineart/triceratops/body.png"
+    },
+    {
+      "id": "frill",
+      "parent": "body",
+      "pivot": {
+        "x": 706,
+        "y": 418
+      },
+      "z": 4,
+      "box": {
+        "x": 617,
+        "y": 119,
+        "w": 289,
+        "h": 329
+      },
+      "mask": "/assets/masks/triceratops/frill.png",
+      "lineart": "/assets/lineart/triceratops/frill.png"
+    },
+    {
+      "id": "head",
+      "parent": "frill",
+      "pivot": {
+        "x": 800,
+        "y": 340
+      },
+      "z": 5,
+      "box": {
+        "x": 751,
+        "y": 151,
+        "w": 283,
+        "h": 262
+      },
+      "mask": "/assets/masks/triceratops/head.png",
+      "lineart": "/assets/lineart/triceratops/head.png"
+    },
+    {
+      "id": "legRearNear",
+      "parent": "body",
+      "pivot": {
+        "x": 416,
+        "y": 440
+      },
+      "z": 6,
+      "box": {
+        "x": 330,
+        "y": 398,
+        "w": 152,
+        "h": 307
+      },
+      "mask": "/assets/masks/triceratops/legRearNear.png",
+      "lineart": "/assets/lineart/triceratops/legRearNear.png"
+    },
+    {
+      "id": "legFrontNear",
+      "parent": "body",
+      "pivot": {
+        "x": 652,
+        "y": 440
+      },
+      "z": 7,
+      "box": {
+        "x": 566,
+        "y": 398,
+        "w": 152,
+        "h": 307
+      },
+      "mask": "/assets/masks/triceratops/legFrontNear.png",
+      "lineart": "/assets/lineart/triceratops/legFrontNear.png"
+    }
+  ]
+}
