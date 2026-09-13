@@ -150,6 +150,49 @@ export function solveHomography(src: Pt[], dst: Pt[]): Mat3 | null {
   return m.map((v) => v / m[8]) as Mat3;
 }
 
+
+/**
+ * Fit a similarity transform: rotation, uniform scale and translation only.
+ *
+ * Used for the coarse fit from the QR, and deliberately NOT a full homography. Four
+ * corners of a symbol spanning a tenth of the sheet cannot constrain perspective
+ * terms: tiny corner errors produce a large spurious keystone which then blows up
+ * non-linearly with distance, putting the far corners hundreds of pixels out. A
+ * similarity has no perspective terms to get wrong, so its error grows only linearly
+ * and it stays a usable starting point right across the sheet.
+ *
+ *   u = a*x - b*y + tx
+ *   v = b*x + a*y + ty
+ */
+export function solveSimilarity(src: Pt[], dst: Pt[]): Mat3 | null {
+  if (src.length !== dst.length || src.length < 2) return null;
+
+  const rows: number[][] = [];
+  const rhs: number[] = [];
+  for (let i = 0; i < src.length; i++) {
+    rows.push([src[i].x, -src[i].y, 1, 0]);
+    rhs.push(dst[i].x);
+    rows.push([src[i].y, src[i].x, 0, 1]);
+    rhs.push(dst[i].y);
+  }
+
+  const ata: number[][] = Array.from({ length: 4 }, () => new Array(4).fill(0));
+  const atb: number[] = new Array(4).fill(0);
+  for (let r = 0; r < rows.length; r++) {
+    for (let i = 0; i < 4; i++) {
+      atb[i] += rows[r][i] * rhs[r];
+      for (let j = 0; j < 4; j++) ata[i][j] += rows[r][i] * rows[r][j];
+    }
+  }
+
+  const v = solveLinearSystem(ata, atb);
+  if (!v) return null;
+
+  const [a, b, tx, ty] = v;
+  if (Math.hypot(a, b) < 1e-9) return null;
+  return [a, -b, tx, b, a, ty, 0, 0, 1];
+}
+
 /** RMS reprojection error in destination units. The honest quality signal. */
 export function reprojectionRms(m: Mat3, src: Pt[], dst: Pt[]): number {
   let sum = 0;

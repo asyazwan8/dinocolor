@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BOX_INNER_CANVAS_CORNERS, type Pt } from "@/lib/sheet/geometry";
+import { BOX_OUTER_CANVAS_CORNERS, QR_CANVAS_CORNERS } from "@/lib/sheet/geometry";
 import {
   IDENTITY,
   type Mat3,
@@ -9,6 +10,7 @@ import {
   orderCorners,
   reprojectionRms,
   solveHomography,
+  solveSimilarity,
 } from "@/lib/vision/homography";
 
 /** A plausible hand-held phone view: rotation, scale, translation and real keystone. */
@@ -131,5 +133,73 @@ describe("orderCorners", () => {
 
   it("rejects anything that is not four points", () => {
     expect(orderCorners([{ x: 0, y: 0 }])).toBeNull();
+  });
+});
+
+describe("solveSimilarity", () => {
+  /** Rotate 12 degrees, scale 3.4x, translate. No perspective. */
+  const angle = (12 * Math.PI) / 180;
+  const scale = 3.4;
+  const SIMILARITY: Mat3 = [
+    scale * Math.cos(angle), -scale * Math.sin(angle), 220,
+    scale * Math.sin(angle), scale * Math.cos(angle), 140,
+    0, 0, 1,
+  ];
+
+  it("recovers a rotation, scale and translation exactly", () => {
+    const observed = project(SIMILARITY, QR_CANVAS_CORNERS);
+    const solved = solveSimilarity(QR_CANVAS_CORNERS, observed);
+
+    expect(solved).not.toBeNull();
+    for (let i = 0; i < 9; i++) {
+      expect((solved as Mat3)[i]).toBeCloseTo(SIMILARITY[i], 6);
+    }
+  });
+
+  it("never produces perspective terms", () => {
+    const wonky = [
+      { x: 0, y: 0 }, { x: 100, y: 4 }, { x: 96, y: 120 }, { x: -6, y: 110 },
+    ];
+    const solved = solveSimilarity(QR_CANVAS_CORNERS, wonky) as Mat3;
+    expect(solved[6]).toBe(0);
+    expect(solved[7]).toBe(0);
+    expect(solved[8]).toBe(1);
+  });
+
+  it("rejects fewer than two correspondences", () => {
+    expect(solveSimilarity([{ x: 0, y: 0 }], [{ x: 1, y: 1 }])).toBeNull();
+  });
+
+  /**
+   * The reason the coarse fit is a similarity and not a homography.
+   *
+   * The QR spans about a tenth of the sheet. Sub-pixel noise on four corners that
+   * close together cannot meaningfully constrain a homography's perspective terms,
+   * so the solver absorbs the noise into a spurious keystone that then blows up
+   * non-linearly with distance. Measured on the real sheet this put far corners
+   * hundreds of pixels out, which is what broke box detection until the coarse
+   * model was constrained.
+   */
+  it("extrapolates far beyond the fitted points far better than a homography", () => {
+    const clean = project(SIMILARITY, QR_CANVAS_CORNERS);
+    const jitter = [
+      { x: 0.5, y: -0.4 }, { x: -0.45, y: 0.5 }, { x: 0.4, y: 0.45 }, { x: -0.5, y: -0.35 },
+    ];
+    const noisy = clean.map((p, i) => ({ x: p.x + jitter[i].x, y: p.y + jitter[i].y }));
+
+    const asHomography = solveHomography(QR_CANVAS_CORNERS, noisy) as Mat3;
+    const asSimilarity = solveSimilarity(QR_CANVAS_CORNERS, noisy) as Mat3;
+
+    const worst = (m: Mat3) =>
+      Math.max(
+        ...BOX_OUTER_CANVAS_CORNERS.map((corner) => {
+          const got = applyH(m, corner);
+          const want = applyH(SIMILARITY, corner);
+          return Math.hypot(got.x - want.x, got.y - want.y);
+        }),
+      );
+
+    expect(worst(asSimilarity)).toBeLessThan(12);
+    expect(worst(asHomography)).toBeGreaterThan(worst(asSimilarity) * 3);
   });
 });
