@@ -18,7 +18,20 @@ import type { Rig } from "./types";
 export const MAX_DINOS = 10;
 
 /** Stage pixels per second at a normal walking pace, before lane scaling. */
-const WALK_SPEED = 46;
+const WALK_SPEED = 58;
+
+/**
+ * Arrivals stride in rather than amble.
+ *
+ * A child scans their sheet and looks straight up at the screen, so the gap between
+ * scanning and seeing their own dinosaur is the moment the whole installation is
+ * judged on. At an ambling pace a big rig is barely a nose at the edge after four
+ * seconds. It enters at a trot and settles once it is properly in view.
+ */
+const ENTRY_SPEED = 2.6;
+
+/** Fallback in seconds, so a slow lane cannot leave a dinosaur entering forever. */
+const ENTRY_TIMEOUT = 7;
 
 type Behaviour = "enter" | "wander" | "browse" | "exit";
 
@@ -142,10 +155,10 @@ export class World {
       lane,
       x,
       facing,
-      speed: 1,
-      targetSpeed: 1,
+      speed: startAt === undefined ? ENTRY_SPEED : 1,
+      targetSpeed: startAt === undefined ? ENTRY_SPEED : 1,
       behaviour: startAt === undefined ? "enter" : "wander",
-      untilChange: 3 + Math.random() * 4,
+      untilChange: ENTRY_TIMEOUT,
       bornAt: performance.now(),
       scale,
       halfWidth,
@@ -158,14 +171,21 @@ export class World {
     this.enforceCap();
   }
 
-  /** Prefer the emptiest lane, so arrivals spread across depth. */
+  /**
+   * Emptiest lane, and among equals the nearest.
+   *
+   * Spreading across depth is what makes the valley read as a place rather than a
+   * row. But a child scans their sheet and looks up expecting to find their own
+   * dinosaur, and the far lane renders it small and hazed - so an arrival with a
+   * free choice takes the front, and the distant lanes fill only as the screen does.
+   */
   private pickLane(): number {
     const counts = LANES.map(
       (_, i) => this.dinos.filter((d) => d.lane === i && d.behaviour !== "exit").length,
     );
     const fewest = Math.min(...counts);
     const candidates = counts.flatMap((c, i) => (c === fewest ? [i] : []));
-    return candidates[Math.floor(Math.random() * candidates.length)];
+    return candidates[candidates.length - 1];
   }
 
   /**
@@ -206,8 +226,9 @@ export class World {
     switch (dino.behaviour) {
       case "enter": {
         const inside = dino.x > dino.halfWidth && dino.x < STAGE.w - dino.halfWidth;
-        if (inside) {
+        if (inside || dino.untilChange <= 0) {
           dino.behaviour = "wander";
+          dino.targetSpeed = 0.85 + Math.random() * 0.3;
           dino.untilChange = 4 + Math.random() * 6;
         }
         break;

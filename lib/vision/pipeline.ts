@@ -5,7 +5,11 @@ import {
   type Pt,
 } from "@/lib/sheet/geometry";
 import type { SheetCode } from "@/lib/sheet/code";
-import { refineBoxCorners, type BoxDetectOptions } from "./boxDetect";
+import {
+  refineBoxCorners,
+  type BoxDetectOptions,
+  type BoxDetectResult,
+} from "./boxDetect";
 import {
   applyH,
   mat3Inv,
@@ -109,55 +113,76 @@ export function captureFromFrame(
   // homography, so the second pass only has to nudge each edge into place: it can
   // then search a narrow band and land sub-pixel, without being pulled off by crayon
   // or a table edge running near the border.
-  const wide = refineBoxCorners(gray, coarse, { ...options.box, searchRadiusFraction: 0.22 });
-  if (!wide) return fail({ kind: "no-box" }, { code: qr.code });
+  /**
+   * How far the detected QR lands from where a homography says it should, in
+   * canonical pixels. Zero means the border fit and the QR agree perfectly.
+   */
+  const disagreementOf = (model: Mat3): number => {
+    const canvasFromImage = mat3Inv(model);
+    if (!canvasFromImage) return Infinity;
+    let sum = 0;
+    for (let i = 0; i < 4; i++) {
+      const p = applyH(canvasFromImage, qr.corners[i]);
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return Infinity;
+      sum += (p.x - QR_CANVAS_CORNERS[i].x) ** 2 + (p.y - QR_CANVAS_CORNERS[i].y) ** 2;
+    }
+    return Math.sqrt(sum / 4);
+  };
 
-  const firstPass = solveHomography(BOX_OUTER_CANVAS_CORNERS, wide.corners);
-  if (!firstPass) {
-    return fail({ kind: "degenerate" }, { code: qr.code, boxCorners: wide.corners });
-  }
-
-  // Two tightening passes, not one. The first pass corrects most of the coarse
-  // error but is still fitting from a model that was wrong by a good fraction of the
-  // sheet, so a single narrow pass can start outside its own search band on a steeply
-  // angled shot. Each pass re-solves before narrowing again.
-  let box = wide;
-  let model = firstPass;
-  for (const fraction of [0.05, 0.018]) {
+  const attempt = (model: Mat3, fraction: number) => {
     const refined = refineBoxCorners(gray, model, {
       ...options.box,
       searchRadiusFraction: fraction,
     });
-    // A pass that fails is skipped rather than ending the loop: a narrower band can
-    // still succeed where a wider one picked up a competing edge.
-    if (!refined) continue;
-    const next = solveHomography(BOX_OUTER_CANVAS_CORNERS, refined.corners);
-    if (!next) continue;
-    box = refined;
-    model = next;
+    if (!refined) return null;
+    const solved = solveHomography(BOX_OUTER_CANVAS_CORNERS, refined.corners);
+    return solved ? { box: refined, model: solved, score: disagreementOf(solved) } : null;
+  };
+
+  /**
+   * Open with several sweep widths and keep whichever agrees best.
+   *
+   * There is no single good width. The similarity is anchored on the QR in one
+   * corner, so its error grows with distance and depends on the angle: too narrow
+   * and the far edge falls outside the band entirely, too wide and a nearby edge
+   * has room to lock onto competing structure. Trying a few and scoring them
+   * removes the guess - and with it the whack-a-mole of tuning one constant to suit
+   * every geometry at once.
+   */
+  let best: { box: BoxDetectResult; model: Mat3; score: number } | null = null;
+  for (const fraction of [0.2, 0.3, 0.44]) {
+    const candidate = attempt(coarse, fraction);
+    if (candidate && (!best || candidate.score < best.score)) best = candidate;
+  }
+  if (!best) return fail({ kind: "no-box" }, { code: qr.code });
+
+  /**
+   * Then narrow in steps, again keeping the best rather than the last.
+   *
+   * Tightening is not reliably monotonic: a narrower band is more precise when it
+   * converges, but lands on noise when the previous pass left more error than the
+   * band covers.
+   */
+  let model = best.model;
+  for (const fraction of [0.12, 0.05, 0.02, 0.01]) {
+    const candidate = attempt(model, fraction);
+    if (!candidate) continue;
+    // Always step forward, so the next band narrows around the newest estimate...
+    model = candidate.model;
+    // ...but only adopt it as the answer if it actually agrees better.
+    if (candidate.score < best.score) best = candidate;
   }
 
-  const imageFromCanvas = solveHomography(BOX_OUTER_CANVAS_CORNERS, box.corners);
-  if (!imageFromCanvas) {
-    return fail({ kind: "degenerate" }, { code: qr.code, boxCorners: box.corners });
-  }
+  const box = best.box;
+  const imageFromCanvas = best.model;
+  const disagreement = best.score;
 
-  // Cross-check: pull the detected QR back into canonical space through the
-  // box-derived homography and see whether it lands where the sheet says it should.
-  const canvasFromImage = mat3Inv(imageFromCanvas);
-  if (!canvasFromImage) {
-    return fail({ kind: "degenerate" }, { code: qr.code, boxCorners: box.corners });
-  }
-
-  let sum = 0;
-  for (let i = 0; i < 4; i++) {
-    const p = applyH(canvasFromImage, qr.corners[i]);
-    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) {
-      return fail({ kind: "degenerate" }, { code: qr.code, boxCorners: box.corners });
-    }
-    sum += (p.x - QR_CANVAS_CORNERS[i].x) ** 2 + (p.y - QR_CANVAS_CORNERS[i].y) ** 2;
-  }
-  const disagreement = Math.sqrt(sum / 4);
+  /**
+   * The cross-check is a selection criterion above as well as a gate here. It still
+   * earns the gate: if every candidate disagrees this badly, the border found was
+   * not this sheet's, and rectifying from it would put the printed frame through
+   * the middle of the child's drawing.
+   */
   if (disagreement > MAX_QR_DISAGREEMENT) {
     return fail(
       { kind: "inconsistent", disagreement },

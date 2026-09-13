@@ -50,11 +50,6 @@ export interface BoxDetectOptions {
    * drop shadow, all of which are fine at this scale.
    */
   minRunFraction: number;
-  /**
-   * Thickest dark run accepted, as a multiple of the predicted thickness. Rejects
-   * blocks of crayon and the table beyond the page, which are far broader.
-   */
-  maxRunFactor: number;
 }
 
 export const DEFAULT_BOX_OPTIONS: BoxDetectOptions = {
@@ -63,7 +58,6 @@ export const DEFAULT_BOX_OPTIONS: BoxDetectOptions = {
   minInlierRatio: 0.45,
   minContrast: 40,
   minRunFraction: 0.34,
-  maxRunFactor: 3.4,
 };
 
 /** Total-least-squares line fit. Handles vertical lines, unlike y = mx + c. */
@@ -119,12 +113,28 @@ export function intersectLines(a: Line, b: Line): Pt | null {
  * what BOX_OUTER_CANVAS_CORNERS names. Taking the darkest sample instead would land
  * somewhere inside the band, biasing every edge inward by half the border width.
  *
- * A probe crosses plenty of dark things that are not the border: a block of crayon,
- * the QR, the line art, the table beyond the page. Proximity alone cannot tell them
- * apart, because early passes predict from a model that is still wrong by more than
- * the gap between them. Thickness can: the border's width is known from the sheet
- * geometry, crayon is far broader and QR modules far finer. So candidates are
- * filtered by how well their thickness matches, and only then by which is nearest.
+ * A probe crosses plenty of dark things that are not the border: crayon, the QR,
+ * the line art, the table beyond the page. What separates the border from all of
+ * them is position rather than appearance - probes run outside-to-inside, and
+ * nothing on the sheet lies outside the border except bare paper margin. So the
+ * border is simply the FIRST run thick enough to be it.
+ *
+ * First, not nearest. Nearest fails once a child colours up to the border: the
+ * crayon merges with it into one long dark run, which a thickness window then
+ * rejects outright. The merged run still begins exactly at the border's outer edge,
+ * so taking the outermost qualifying run reads it correctly whether or not anything
+ * is touching from the inside.
+ *
+ * "First" needs one qualification, because the sheet casts a shadow. On a table the
+ * probe crosses room, then soft shadow, then the page's white margin, then the
+ * border. The shadow is dark, bounded and outermost, so position alone would choose
+ * it. What tells them apart is what lies immediately OUTSIDE each: bare paper
+ * outside the border, more shadow outside the shadow. So a run only counts as the
+ * border if a stretch of bright paper sits directly outside it.
+ *
+ * Runs touching either end of the probe are discarded too: those are the table
+ * beyond the page, or a border already clipped by the search band, and neither has
+ * a trustworthy outer edge within this probe.
  */
 function probeForEdge(
   gray: GrayImage,
@@ -135,7 +145,6 @@ function probeForEdge(
   minContrast: number,
   expectedThickness: number,
   minRunFraction: number,
-  maxRunFactor: number,
 ): Pt | null {
   const samples: number[] = [];
   for (let t = -radius; t <= radius; t++) {
@@ -151,39 +160,62 @@ function probeForEdge(
   // does not move when the whole photo is dim.
   const threshold = (bright + dark) / 2;
   const minRun = Math.max(2, expectedThickness * minRunFraction);
-  const maxRun = expectedThickness * maxRunFactor;
+  // The printed margin between border and page edge is wider than the border
+  // itself, so asking for half a border's worth of paper is easily satisfied by a
+  // real sheet and not by the gradient edge of a shadow.
+  const marginRun = Math.max(3, Math.round(expectedThickness * 0.5));
+  const paperLevel = bright * 0.82;
 
-  // Collected rather than tracked through a closure, so the best-of is a plain
-  // reduction over the candidates.
-  const candidates: { t: number; distance: number }[] = [];
-  let runStart = -1;
+  /**
+   * Ink never meets paper on an exact pixel boundary: there is always a partially
+   * dark sample or two where they blend, in print and again in the camera. Those
+   * samples are skipped, otherwise the very pixel that proves an edge exists is the
+   * one that fails the test for paper.
+   */
+  const EDGE_BLEND = 3;
 
-  const consider = (from: number, to: number) => {
-    const length = to - from;
-    if (length < minRun || length > maxRun) return;
-    if (from <= 0) return;
+  /**
+   * Most of the margin, not all of it. The sheet prints its title above the box and
+   * its instructions below, so those margins legitimately contain ink - and a child
+   * may well write their name there too. A shadow, by contrast, is dark almost
+   * everywhere, so a majority test still separates the two cleanly.
+   */
+  const PAPER_MAJORITY = 0.65;
 
-    // Linear interpolation across the light-to-dark crossing.
-    const before = samples[from - 1];
-    const after = samples[from];
-    const frac = before === after ? 0 : (before - threshold) / (before - after);
-    const t = from - 1 + frac - radius;
-    candidates.push({ t, distance: Math.abs(t) });
+  const hasPaperOutside = (from: number): boolean => {
+    const last = from - 1 - EDGE_BLEND;
+    if (last - marginRun + 1 < 0) return false;
+
+    let bright = 0;
+    for (let k = 0; k < marginRun; k++) {
+      if (samples[last - k] >= paperLevel) bright++;
+    }
+    return bright / marginRun >= PAPER_MAJORITY;
   };
 
+  let runStart = -1;
   for (let i = 0; i <= samples.length; i++) {
     const isDark = i < samples.length && samples[i] < threshold;
+
     if (isDark && runStart < 0) {
       runStart = i;
-    } else if (!isDark && runStart >= 0) {
-      consider(runStart, i);
-      runStart = -1;
+      continue;
     }
+    if (isDark || runStart < 0) continue;
+
+    const touchesEnd = runStart <= 0 || i >= samples.length;
+    if (!touchesEnd && i - runStart >= minRun && hasPaperOutside(runStart)) {
+      // Linear interpolation across the light-to-dark crossing.
+      const before = samples[runStart - 1];
+      const after = samples[runStart];
+      const frac = before === after ? 0 : (before - threshold) / (before - after);
+      const t = runStart - 1 + frac - radius;
+      return { x: origin.x + nx * t, y: origin.y + ny * t };
+    }
+    runStart = -1;
   }
 
-  if (!candidates.length) return null;
-  const best = candidates.reduce((a, b) => (b.distance < a.distance ? b : a));
-  return { x: origin.x + nx * best.t, y: origin.y + ny * best.t };
+  return null;
 }
 
 export interface BoxDetectResult {
@@ -278,7 +310,7 @@ export function refineBoxCorners(
       const origin = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
       const hit = probeForEdge(
         gray, origin, nx, ny, radiusFor(e), opts.minContrast,
-        borderThickness(e, f), opts.minRunFraction, opts.maxRunFactor,
+        borderThickness(e, f), opts.minRunFraction,
       );
       if (hit) hits.push(hit);
     }

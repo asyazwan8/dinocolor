@@ -87,9 +87,11 @@ export default function ScreenClient() {
               const image = await decodeTexture(event.texture);
               await world.addDino(event.id, event.dino as DinoType, image);
               setCount(world.count);
-            } catch {
+            } catch (error) {
               // A corrupt payload must not take the installation down; the next
-              // child's scan should still work.
+              // child's scan should still work. It is still worth saying so: a
+              // silent swallow here looks exactly like a dead relay.
+              console.error("could not add dinosaur", error);
             }
           })();
         },
