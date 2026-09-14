@@ -38,10 +38,9 @@ export type CaptureFailure =
   | { kind: "inconsistent"; disagreement: number }
   | { kind: "quality"; metrics: QualityMetrics };
 
-export interface CaptureSuccess {
+export interface LocateSuccess {
   ok: true;
   code: SheetCode;
-  texture: RgbaImage;
   boxCorners: Pt[];
   /** canonical space -> image space */
   imageFromCanvas: Mat3;
@@ -49,6 +48,10 @@ export interface CaptureSuccess {
   boxConfidence: number;
   boxEdgeConfidence: number[];
   qrDisagreement: number;
+}
+
+export interface CaptureSuccess extends LocateSuccess {
+  texture: RgbaImage;
   white: WhitePoint | null;
 }
 
@@ -61,6 +64,7 @@ export interface CaptureFailureResult {
   code?: SheetCode;
 }
 
+export type LocateResult = LocateSuccess | CaptureFailureResult;
 export type CaptureResult = CaptureSuccess | CaptureFailureResult;
 
 const HINTS: Record<CaptureFailure["kind"], string> = {
@@ -83,8 +87,12 @@ export interface CaptureOptions {
 }
 
 /**
- * Full capture: locate the sheet, verify it, and flatten it into the canonical
- * texture the rig expects.
+ * Find the sheet and verify it, without warping anything.
+ *
+ * Split out from the capture because the viewfinder runs this many times a second
+ * just to draw an outline and a hint, and warping a million pixels to throw them
+ * away is most of the cost of a frame. The capture below is the same work plus the
+ * warp, run once, when the shutter is pressed.
  *
  * The QR and the box play deliberately different roles. The QR says which sheet this
  * is and roughly where it sits; the box, spanning the whole sheet, provides the
@@ -92,10 +100,10 @@ export interface CaptureOptions {
  * together, so that a disagreement surfaces as a rejection instead of quietly
  * dragging the fit halfway between two wrong answers.
  */
-export function captureFromFrame(
+export function locateSheet(
   frame: RgbaImage,
   options: Partial<CaptureOptions> = {},
-): CaptureResult {
+): LocateResult {
   const gray = toGray(frame);
 
   const qr = detectQr(frame, { tryInverted: options.tryInvertedQr });
@@ -107,12 +115,6 @@ export function captureFromFrame(
   const coarse = solveSimilarity(QR_CANVAS_CORNERS, qr.corners);
   if (!coarse) return fail({ kind: "degenerate" }, { code: qr.code });
 
-  // Two passes. The first sweeps wide, because a similarity seeded from one small
-  // symbol can sit a good fraction of the sheet away from the true border once the
-  // photo is taken at an angle. Re-solving from those corners yields a real
-  // homography, so the second pass only has to nudge each edge into place: it can
-  // then search a narrow band and land sub-pixel, without being pulled off by crayon
-  // or a table edge running near the border.
   /**
    * How far the detected QR lands from where a homography says it should, in
    * canonical pixels. Zero means the border fit and the QR agree perfectly.
@@ -201,19 +203,30 @@ export function captureFromFrame(
     };
   }
 
-  const warped = rectify(frame, imageFromCanvas, TEXTURE.w, TEXTURE.h);
-  const { image, white } = autoWhiteBalance(warped);
-
   return {
     ok: true,
     code: qr.code,
-    texture: image,
     boxCorners: box.corners,
     imageFromCanvas,
     metrics: verdict.metrics,
     boxConfidence: box.confidence,
     boxEdgeConfidence: box.edgeConfidence,
     qrDisagreement: disagreement,
-    white,
   };
+}
+
+/**
+ * Locate the sheet and flatten it into the canonical texture the rig expects.
+ */
+export function captureFromFrame(
+  frame: RgbaImage,
+  options: Partial<CaptureOptions> = {},
+): CaptureResult {
+  const located = locateSheet(frame, options);
+  if (!located.ok) return located;
+
+  const warped = rectify(frame, located.imageFromCanvas, TEXTURE.w, TEXTURE.h);
+  const { image, white } = autoWhiteBalance(warped);
+
+  return { ...located, texture: image, white };
 }

@@ -1,4 +1,5 @@
 import {
+  BACKDROP_SRC,
   HORIZON_Y,
   LANES,
   PALETTE,
@@ -327,4 +328,20 @@ export function makeForeground(): HTMLCanvasElement {
   }
 
   return canvas;
+}
+
+/**
+ * Load the painted valley, or report that it is absent.
+ *
+ * The renderer must not assume the painting is there: it is committed art, and a
+ * checkout without it still has to run. A null here simply means the procedural
+ * layers above are used instead.
+ */
+export function loadBackdrop(src: string = BACKDROP_SRC): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
 }

@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { notFound } from "next/navigation";
 import QRCode from "qrcode";
 import { formatSheetCode } from "@/lib/sheet/code";
@@ -9,10 +7,22 @@ import {
   BOX_OUTER_MM,
   FOOTER_MM,
   PAGE_MM,
+  PX_PER_MM,
   QR_MM,
   TITLE_BAND_MM,
 } from "@/lib/sheet/geometry";
 import { dinoBySlug, type DinoSpec } from "@/lib/sheet/types";
+import triceratopsRig from "@/world/rigs/triceratops.json";
+
+/**
+ * Where each species' artwork sits inside the box, taken from the rig the scanner
+ * uses. Sharing one source means the printed sheet and the rectified texture cannot
+ * drift apart: a drawing printed even slightly off from where the rig expects it
+ * would arrive on screen sliced along the wrong lines.
+ */
+const RIGS: Partial<Record<string, { artwork: { src: string; x: number; y: number; w: number; h: number } }>> = {
+  triceratops: triceratopsRig,
+};
 
 const MAX_SHEETS = 60;
 
@@ -35,12 +45,8 @@ function serialFor(index: number, start: number): string {
   return String(start + index).padStart(4, "0");
 }
 
-function Sheet({ dino, serial, art, qr }: {
-  dino: DinoSpec;
-  serial: string;
-  art: string;
-  qr: string;
-}) {
+function Sheet({ dino, serial, qr }: { dino: DinoSpec; serial: string; qr: string }) {
+  const artwork = RIGS[dino.slug]?.artwork;
   return (
     <div className="sheet">
       <div className="title">
@@ -49,9 +55,22 @@ function Sheet({ dino, serial, art, qr }: {
       </div>
 
       <div className="box">
-        {/* Art fills the box interior exactly, so canonical pixels map 1:1 to the
-            rectified texture the scanner produces. */}
-        <div className="art" dangerouslySetInnerHTML={{ __html: art }} />
+        {/* Positioned from the rig's own placement, in canonical pixels converted to
+            millimetres, so the printed drawing lands exactly where the rig slices it. */}
+        {artwork ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            className="art"
+            alt=""
+            src={artwork.src}
+            style={{
+              left: `${artwork.x / PX_PER_MM}mm`,
+              top: `${artwork.y / PX_PER_MM}mm`,
+              width: `${artwork.w / PX_PER_MM}mm`,
+              height: `${artwork.h / PX_PER_MM}mm`,
+            }}
+          />
+        ) : null}
 
         {/* The quiet zone is painted white so crayon straying near the code cannot
             break decoding. */}
@@ -85,8 +104,6 @@ export default async function PrintPage({
   const count = Math.min(MAX_SHEETS, Math.max(1, Number(query.count ?? 1) || 1));
   const start = Math.max(1, Number(query.from ?? 1) || 1);
 
-  const art = await readFile(resolve(`assets/dino/${dino.slug}.svg`), "utf8");
-
   const sheets = await Promise.all(
     Array.from({ length: count }, async (_, i) => {
       const serial = serialFor(i, start);
@@ -105,7 +122,7 @@ export default async function PrintPage({
         Turn off &ldquo;fit to page&rdquo;.
       </div>
       {sheets.map((sheet) => (
-        <Sheet key={sheet.serial} dino={dino} serial={sheet.serial} art={art} qr={sheet.qr} />
+        <Sheet key={sheet.serial} dino={dino} serial={sheet.serial} qr={sheet.qr} />
       ))}
     </>
   );
@@ -160,9 +177,7 @@ body { background: #6b7280; }
   background: #fff;
 }
 
-.art { position: absolute; left: 0; top: 0;
-  width: ${BOX_INNER_MM.w}mm; height: ${BOX_INNER_MM.h}mm; }
-.art svg { display: block; width: 100%; height: 100%; }
+.art { position: absolute; display: block; }
 
 .quiet {
   position: absolute;

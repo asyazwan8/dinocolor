@@ -1,133 +1,52 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800"
+     data-artwork="/assets/dino/triceratops.png">
   <!--
-    Dino Colourise - Triceratops colouring line art AND rig source.
+    Dino Colourise - Triceratops rig definition.
 
-    Every path in #parts is a riggable body part. data-pivot is the joint it rotates
-    about, in canonical texture pixels; data-parent is its bone parent; data-z is the
-    draw order back to front. scripts/buildRig.mjs reads this one file and emits the
-    rig JSON, the line-art layer and the per-part alpha masks.
+    The printed artwork is the PNG named in data-artwork. This file does NOT draw the
+    dinosaur; it only says which bone each region of that drawing belongs to.
 
-    The pose is natural, so limbs overlap. That is fine and intended: fills are opaque
-    white, so draw order occludes the seams in print and the same ordering hides them
-    at runtime.
+    Why it is split that way. A mask hand-traced around a raster outline is wrong in
+    one direction or the other: overshoot the ink and bare paper becomes part of the
+    animal, undershoot and the outline is clipped. So buildRig derives the silhouette
+    from the artwork itself, by flooding inwards from the border - everything the
+    flood cannot reach is the dinosaur. Each part's mask is then that silhouette
+    intersected with the polygon below, which means the OUTER edge always follows the
+    printed line exactly and these polygons only have to be right about where one
+    bone hands over to the next. Those boundaries are interior, so being a few pixels
+    out is invisible.
 
-    THE TUCK RULE. Area hidden beneath another part never gets coloured, so it is bare
-    white if a rotation later reveals it. Rotation is about the pivot, so a point d
-    above the pivot sweeps about d*sin(theta) sideways. DinoRig swings legs at
-    theta <= 0.42 rad, so a leg top 100px above its pivot moves ~41px. Every limb
-    therefore tucks ~100px past its pivot into the body, which keeps the swept area
-    comfortably covered. If the swing amplitude in world/DinoRig.ts changes, this
-    overlap has to change with it.
+    Polygons may overlap, and at the joints they should: draw order resolves it, and
+    the overlap is what stops a rotation opening a gap. Between them they must cover
+    the whole silhouette, though - anything claimed by no part is simply missing from
+    the dinosaur on screen.
 
-    The QR occupies (1040,640)-(1160,760) plus a 20px quiet zone, so nothing may be
-    drawn inside x>=1020 AND y>=620. The head clears it by sitting high.
+    The QR occupies (1040,640)-(1160,760) plus a 20px quiet zone. The artwork leaves
+    that corner empty, so no polygon reaches into it.
   -->
-  <g id="parts" fill="#ffffff" stroke="#111111" stroke-width="7"
-     stroke-linejoin="round" stroke-linecap="round">
+  <g id="parts">
+    <polygon id="part-legRearFar" data-parent="body" data-pivot="412,470" data-z="0"
+      points="368,412 470,412 476,570 470,616 462,700 372,700 360,616 356,570"/>
 
-    <path id="part-legRearFar" data-parent="body" data-pivot="360,500" data-z="0"
-      d="M 312,452
-         C 306,414 320,402 356,402
-         C 392,402 410,414 408,452
-         C 404,492 396,530 394,570
-         C 392,596 400,612 400,626
-         C 402,640 380,648 356,648
-         C 334,648 320,640 320,626
-         C 320,612 322,596 320,570
-         C 318,530 314,492 312,452 Z"/>
+    <polygon id="part-legFrontFar" data-parent="body" data-pivot="712,458" data-z="1"
+      points="636,400 790,400 796,570 790,616 782,700 644,700 632,616 628,570"/>
 
-    <path id="part-legFrontFar" data-parent="body" data-pivot="650,500" data-z="1"
-      d="M 602,452
-         C 596,414 610,402 646,402
-         C 682,402 700,414 698,452
-         C 694,492 686,530 684,570
-         C 682,596 690,612 690,626
-         C 692,640 670,648 646,648
-         C 624,648 610,640 610,626
-         C 610,612 612,596 610,570
-         C 608,530 604,492 602,452 Z"/>
+    <polygon id="part-tail" data-parent="body" data-pivot="392,452" data-z="2"
+      points="44,436 150,392 268,330 366,296 440,300 448,420 444,532 300,540 150,520 40,492"/>
 
-    <path id="part-tail" data-parent="body" data-pivot="310,440" data-z="2"
-      d="M 316,368 C 256,372 184,420 122,478 C 78,518 44,556 42,572
-         C 56,582 96,562 134,540 C 206,498 276,478 332,488
-         C 346,448 340,398 316,368 Z"/>
+    <polygon id="part-body" data-parent="" data-pivot="560,390" data-z="3"
+      points="316,300 392,236 520,182 660,176 760,206 812,268 836,352 840,446 816,530 700,566 520,574 400,552 340,486 312,404"/>
 
-    <path id="part-body" data-parent="" data-pivot="500,400" data-z="3"
-      d="M 262,456
-         C 254,382 292,300 380,258 C 470,216 606,214 698,260
-         C 756,290 794,342 804,402 C 812,456 794,510 762,548
-         C 676,584 418,588 318,556 C 280,542 264,504 262,456 Z"/>
+    <polygon id="part-frill" data-parent="body" data-pivot="762,398" data-z="4"
+      points="706,268 726,180 790,128 872,126 920,178 932,268 926,352 892,418 812,438 736,414"/>
 
-    <path id="part-frill" data-parent="body" data-pivot="742,420" data-z="4"
-      d="M 716,466 C 690,422 680,352 696,290 C 712,226 756,178 816,156
-         A 27,27 0 0 1 868,150 A 27,27 0 0 1 918,163
-         A 27,27 0 0 1 958,196 A 27,27 0 0 1 982,246
-         C 998,302 996,370 974,426 C 950,474 896,498 836,494
-         C 786,490 740,484 716,466 Z"/>
+    <polygon id="part-head" data-parent="frill" data-pivot="900,360" data-z="5"
+      points="838,250 900,200 1000,172 1080,168 1160,205 1158,300 1112,330 1150,382 1142,468 1084,540 978,536 884,492 836,420 830,330"/>
 
-    <path id="part-head" data-parent="frill" data-pivot="880,370" data-z="5"
-      d="M 852,300
-         C 880,266 918,248 956,250
-         C 986,214 1040,178 1082,172
-         C 1076,198 1044,240 1008,268
-         C 1026,272 1044,278 1058,288
-         C 1090,254 1132,216 1162,210
-         C 1154,238 1124,282 1094,310
-         C 1106,322 1114,338 1116,354
-         C 1126,348 1136,352 1137,363
-         C 1138,378 1126,393 1112,400
-         C 1115,418 1109,435 1095,445
-         C 1079,457 1056,458 1040,449
-         C 1026,441 1018,429 1015,416
-         C 982,441 936,458 890,461
-         C 856,463 834,446 827,417
-         C 818,379 826,332 852,300 Z"/>
+    <polygon id="part-legRearNear" data-parent="body" data-pivot="552,474" data-z="6"
+      points="450,416 634,416 640,570 634,618 626,700 484,700 466,618 462,570"/>
 
-    <path id="part-legRearNear" data-parent="body" data-pivot="448,516" data-z="6"
-      d="M 390,472
-         C 384,428 404,396 444,392
-         C 486,390 508,422 506,472
-         C 502,516 492,556 490,600
-         C 488,628 498,644 498,652
-         C 500,668 474,678 446,678
-         C 420,678 402,668 402,652
-         C 402,644 404,628 402,600
-         C 398,556 392,516 390,472 Z"/>
-
-    <path id="part-legFrontNear" data-parent="body" data-pivot="738,516" data-z="7"
-      d="M 680,472
-         C 674,428 694,396 734,392
-         C 776,390 798,422 796,472
-         C 792,516 782,556 780,600
-         C 778,628 788,644 788,652
-         C 790,668 764,678 736,678
-         C 710,678 692,668 692,652
-         C 692,644 694,628 692,600
-         C 688,556 682,516 680,472 Z"/>
-  </g>
-
-  <!--
-    Interior detail. Drawn into the line-art layer only, never into the masks, so a
-    child gets an eye, hooves and frill ridges to colour around without those lines
-    cutting the silhouette into extra pieces.
-  -->
-  <g id="details" fill="none" stroke="#111111" stroke-width="5"
-     stroke-linejoin="round" stroke-linecap="round">
-    <circle cx="938" cy="344" r="13" fill="#111111" stroke="none"/>
-    <path d="M 1092,372 C 1098,367 1106,370 1107,377"/>
-    <path d="M 1026,418 C 1046,428 1068,431 1086,427"/>
-    <path d="M 860,348 C 884,326 914,316 942,320"/>
-
-    <path d="M 806,196 C 838,172 874,164 910,172"/>
-    <path d="M 762,270 C 800,242 846,232 892,240"/>
-    <path d="M 744,354 C 782,332 826,324 868,330"/>
-    <path d="M 750,432 C 784,416 820,410 854,414"/>
-
-    <path d="M 336,624 L 336,642 M 358,624 L 358,642 M 380,624 L 380,642"/>
-    <path d="M 626,624 L 626,642 M 648,624 L 648,642 M 670,624 L 670,642"/>
-    <path d="M 424,654 L 424,672 M 446,654 L 446,672 M 468,654 L 468,672"/>
-    <path d="M 714,654 L 714,672 M 736,654 L 736,672 M 758,654 L 758,672"/>
-
-    <path d="M 168,486 C 220,462 274,450 322,454"/>
+    <polygon id="part-legFrontNear" data-parent="body" data-pivot="834,450" data-z="7"
+      points="772,392 898,392 906,570 898,618 890,700 782,700 768,618 764,570"/>
   </g>
 </svg>

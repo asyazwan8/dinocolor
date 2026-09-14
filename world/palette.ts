@@ -56,19 +56,26 @@ export interface Lane {
 }
 
 export const LANES: Lane[] = [
-  { baseline: 616, scale: 0.42, haze: 0.5 },
-  { baseline: 700, scale: 0.6, haze: 0.32 },
-  { baseline: 840, scale: 0.82, haze: 0.15 },
-  { baseline: 1010, scale: 1.05, haze: 0 },
+  { baseline: 724, scale: 0.42, haze: 0.42 },
+  { baseline: 802, scale: 0.6, haze: 0.26 },
+  { baseline: 892, scale: 0.82, haze: 0.12 },
+  { baseline: 1012, scale: 1.05, haze: 0 },
 ];
 
 /**
- * Trees stand in the third lane at a fixed height, and are the reference the whole
- * size story leans on: a Brachiosaurus clears them, a Triceratops comes up the
- * trunk. Without something of known size in frame, scale is unreadable.
+ * Trees are the reference the whole size story leans on: a Brachiosaurus clears
+ * them, a Triceratops comes up the trunk. Without something of known size in frame,
+ * scale is unreadable.
+ *
+ * The painted backdrop supplies its own stand of trees, so these are only drawn when
+ * falling back to procedural scenery. Drawing both would double them up.
  */
 export const REFERENCE_TREE_HEIGHT = 300;
 export const REFERENCE_TREE_LANE = 2;
+
+/** The painted valley, and the strip of it redrawn in front of the dinosaurs. */
+export const BACKDROP_SRC = "/assets/world/valley.webp";
+export const FOREGROUND_STRIP = 96;
 
 /** Blend two hex colours. Used to fade distant layers into the haze. */
 export function mixHex(from: string, to: string, t: number): string {

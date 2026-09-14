@@ -1,17 +1,20 @@
 /**
- * Turn one hand-authored SVG into everything the runtime rig needs.
+ * Turn printed artwork plus a rig definition into everything the runtime needs.
  *
- *   assets/dino/<slug>.svg
+ *   assets/dino/<slug>.svg          part polygons + a reference to the artwork
+ *   public/assets/dino/<slug>.png   the printed drawing
  *     -> world/rigs/<slug>.json          bones, pivots, draw order, UV boxes
  *     -> public/assets/masks/<slug>/*    per-part alpha masks
- *     -> public/assets/lineart/<slug>/*  per-part black outlines
+ *     -> public/assets/lineart/<slug>/*  per-part slices of the drawing
  *
- * Parts are cropped to their own bounding box rather than kept full-canvas. A
- * full-canvas quad per part would mean 10 dinos x 8 parts of mostly-empty overdraw
- * every frame; cropping makes fill rate proportional to the ink actually drawn.
+ * The silhouette is derived from the artwork rather than traced by hand. Flooding
+ * inward from the border marks everything the flood can reach as paper; what it
+ * cannot reach is the dinosaur, ink and enclosed white alike. Each part's mask is
+ * that silhouette intersected with its polygon, so the outer edge always follows the
+ * printed line exactly and the polygons only decide which bone owns which region.
  *
- * Interior detail (eye, toes) is clipped to each part's filled region, so details
- * follow the part they sit on without having to be hand-assigned to a bone.
+ * Parts are cropped to the bounding box of their actual mask pixels, not of their
+ * polygon: a full-canvas quad per part would be mostly-empty overdraw every frame.
  */
 import { chromium } from "playwright";
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -26,44 +29,209 @@ if (!slug) {
   process.exit(1);
 }
 
-const svgPath = resolve(`assets/dino/${slug}.svg`);
-const svg = readFileSync(svgPath, "utf8");
+const CANVAS = { w: 1200, h: 800 };
+/** Anything at least this bright counts as paper for the flood. */
+const PAPER_LEVEL = 232;
+/** Margin around each cropped part so nothing is clipped at the edge. */
+const PAD = 6;
+/** Above this luminance the drawing is paper, and drops out of the ink layer. */
+const INK_FLOOR = 238;
 
-/** Margin around each cropped part so round joins and caps are never clipped. */
-const PAD = 10;
+const svg = readFileSync(resolve(`assets/dino/${slug}.svg`), "utf8");
+const artworkSrc = /data-artwork="([^"]+)"/.exec(svg)?.[1];
+if (!artworkSrc) throw new Error(`${slug}.svg has no data-artwork attribute`);
+
+const artworkPath = resolve(`public${artworkSrc}`);
+const artworkExt = artworkSrc.split(".").pop();
+const artworkDataUrl = `data:image/${artworkExt === "png" ? "png" : artworkExt};base64,${readFileSync(
+  artworkPath,
+).toString("base64")}`;
 
 const browser = await chromium.launch({ executablePath: CHROMIUM });
-const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+const page = await browser.newPage({ viewport: { width: CANVAS.w, height: CANVAS.h } });
 await page.setContent(`<style>html,body{margin:0}</style>${svg}`, { waitUntil: "load" });
 
-const meta = await page.evaluate(() => {
-  const root = document.querySelector("svg");
-  const viewBox = root.getAttribute("viewBox").split(/\s+/).map(Number);
-  const parts = [...document.querySelectorAll("#parts > path")].map((el) => {
-    const box = el.getBBox();
+const parts = await page.evaluate(() =>
+  [...document.querySelectorAll("#parts > polygon")].map((el) => {
     const [px, py] = el.dataset.pivot.split(",").map(Number);
     return {
       id: el.id.replace(/^part-/, ""),
       parent: el.dataset.parent || null,
       pivot: { x: px, y: py },
       z: Number(el.dataset.z),
-      raw: { x: box.x, y: box.y, w: box.width, h: box.height },
-      d: el.getAttribute("d"),
-      strokeWidth: Number(
-        el.getAttribute("stroke-width") ??
-          el.parentElement.getAttribute("stroke-width") ??
-          0,
-      ),
+      points: el.getAttribute("points"),
     };
-  });
-  const details = [...document.querySelectorAll("#details > *")].map((el) =>
-    el.outerHTML,
-  );
-  return { viewBox, parts, details };
-});
+  }),
+);
 
-const [, , texW, texH] = meta.viewBox;
-const detailMarkup = meta.details.join("\n");
+const built = await page.evaluate(
+  async ({ parts, artworkDataUrl, CANVAS, PAPER_LEVEL, PAD, INK_FLOOR }) => {
+    const art = new Image();
+    art.src = artworkDataUrl;
+    await art.decode();
+
+    // Fit the artwork inside the canonical box, centred, preserving aspect.
+    const scale = Math.min(CANVAS.w / art.naturalWidth, CANVAS.h / art.naturalHeight);
+    const placement = {
+      w: art.naturalWidth * scale,
+      h: art.naturalHeight * scale,
+      x: (CANVAS.w - art.naturalWidth * scale) / 2,
+      y: (CANVAS.h - art.naturalHeight * scale) / 2,
+    };
+
+    const make = (w, h) => {
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      return [c, c.getContext("2d", { willReadFrequently: true })];
+    };
+
+    const [artCanvas, artCtx] = make(CANVAS.w, CANVAS.h);
+    artCtx.fillStyle = "#fff";
+    artCtx.fillRect(0, 0, CANVAS.w, CANVAS.h);
+    artCtx.drawImage(art, placement.x, placement.y, placement.w, placement.h);
+    const pixels = artCtx.getImageData(0, 0, CANVAS.w, CANVAS.h).data;
+
+    // Flood from the border across paper. Whatever it cannot reach is the drawing.
+    const outside = new Uint8Array(CANVAS.w * CANVAS.h);
+    const stack = [];
+    const isPaper = (i) => {
+      const o = i * 4;
+      return (pixels[o] + pixels[o + 1] + pixels[o + 2]) / 3 >= PAPER_LEVEL;
+    };
+    for (let x = 0; x < CANVAS.w; x++) {
+      stack.push(x, (CANVAS.h - 1) * CANVAS.w + x);
+    }
+    for (let y = 0; y < CANVAS.h; y++) {
+      stack.push(y * CANVAS.w, y * CANVAS.w + CANVAS.w - 1);
+    }
+    while (stack.length) {
+      const i = stack.pop();
+      if (outside[i] || !isPaper(i)) continue;
+      outside[i] = 1;
+      const x = i % CANVAS.w;
+      if (x > 0) stack.push(i - 1);
+      if (x < CANVAS.w - 1) stack.push(i + 1);
+      if (i >= CANVAS.w) stack.push(i - CANVAS.w);
+      if (i < CANVAS.w * (CANVAS.h - 1)) stack.push(i + CANVAS.w);
+    }
+
+    const [silCanvas, silCtx] = make(CANVAS.w, CANVAS.h);
+    const sil = silCtx.createImageData(CANVAS.w, CANVAS.h);
+    let silhouettePixels = 0;
+    for (let i = 0; i < outside.length; i++) {
+      if (outside[i]) continue;
+      sil.data[i * 4 + 3] = 255;
+      silhouettePixels++;
+    }
+    silCtx.putImageData(sil, 0, 0);
+
+    const claimed = new Uint8Array(CANVAS.w * CANVAS.h);
+    const results = [];
+
+    for (const part of parts) {
+      // Polygon, clipped down to the silhouette.
+      const [maskFull, maskCtx] = make(CANVAS.w, CANVAS.h);
+      maskCtx.fillStyle = "#000";
+      maskCtx.beginPath();
+      part.points
+        .trim()
+        .split(/\s+/)
+        .forEach((pair, i) => {
+          const [px, py] = pair.split(",").map(Number);
+          if (i === 0) maskCtx.moveTo(px, py);
+          else maskCtx.lineTo(px, py);
+        });
+      maskCtx.closePath();
+      maskCtx.fill();
+      maskCtx.globalCompositeOperation = "destination-in";
+      maskCtx.drawImage(silCanvas, 0, 0);
+
+      // Tight crop around the pixels that actually survived.
+      const data = maskCtx.getImageData(0, 0, CANVAS.w, CANVAS.h).data;
+      let minX = CANVAS.w;
+      let minY = CANVAS.h;
+      let maxX = -1;
+      let maxY = -1;
+      for (let y = 0; y < CANVAS.h; y++) {
+        for (let x = 0; x < CANVAS.w; x++) {
+          const i = y * CANVAS.w + x;
+          if (!data[i * 4 + 3]) continue;
+          claimed[i] = 1;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+      if (maxX < 0) throw new Error(`part "${part.id}" claims no pixels of the drawing`);
+
+      const box = {
+        x: Math.max(0, minX - PAD),
+        y: Math.max(0, minY - PAD),
+        w: 0,
+        h: 0,
+      };
+      box.w = Math.min(CANVAS.w - box.x, maxX - minX + 1 + PAD * 2);
+      box.h = Math.min(CANVAS.h - box.y, maxY - minY + 1 + PAD * 2);
+
+      const [maskOut, maskOutCtx] = make(box.w, box.h);
+      maskOutCtx.drawImage(maskFull, -box.x, -box.y);
+
+      // This part's slice of the printed drawing, reduced to ink.
+      //
+      // The artwork is black lines on white, and that white is opaque - composited
+      // over a child's colouring it would hide it completely. So the paper is turned
+      // transparent and the line kept, with alpha taken from how dark each pixel is,
+      // which preserves the anti-aliasing along every edge for free.
+      const [lineOut, lineOutCtx] = make(box.w, box.h);
+      lineOutCtx.drawImage(artCanvas, -box.x, -box.y);
+      const line = lineOutCtx.getImageData(0, 0, box.w, box.h);
+      for (let i = 0; i < line.data.length; i += 4) {
+        const lum = (line.data[i] + line.data[i + 1] + line.data[i + 2]) / 3;
+        // Anything at or above INK_FLOOR is paper and drops out entirely; below it,
+        // alpha ramps up so the softened edge of a stroke stays soft.
+        line.data[i] = 17;
+        line.data[i + 1] = 17;
+        line.data[i + 2] = 17;
+        line.data[i + 3] = lum >= INK_FLOOR ? 0 : Math.round(((INK_FLOOR - lum) / INK_FLOOR) * 255);
+      }
+      lineOutCtx.putImageData(line, 0, 0);
+      lineOutCtx.globalCompositeOperation = "destination-in";
+      lineOutCtx.drawImage(maskOut, 0, 0);
+
+      results.push({
+        ...part,
+        box,
+        mask: maskOut.toDataURL("image/png"),
+        lineart: lineOut.toDataURL("image/png"),
+      });
+    }
+
+    // Debug view: the drawing, greyed, with anything no part claimed picked out in
+    // red. Far quicker than reasoning about which polygon fell short.
+    const [dbg, dbgCtx] = make(CANVAS.w, CANVAS.h);
+    dbgCtx.globalAlpha = 0.28;
+    dbgCtx.drawImage(artCanvas, 0, 0);
+    dbgCtx.globalAlpha = 1;
+    const overlay = dbgCtx.createImageData(CANVAS.w, CANVAS.h);
+    let unclaimed = 0;
+    for (let i = 0; i < outside.length; i++) {
+      if (outside[i] || claimed[i]) continue;
+      unclaimed++;
+      overlay.data[i * 4] = 230;
+      overlay.data[i * 4 + 3] = 255;
+    }
+    const [ov, ovCtx] = make(CANVAS.w, CANVAS.h);
+    ovCtx.putImageData(overlay, 0, 0);
+    dbgCtx.drawImage(ov, 0, 0);
+
+    return { results, placement, silhouettePixels, unclaimed, debug: dbg.toDataURL("image/png") };
+  },
+  { parts, artworkDataUrl, CANVAS, PAPER_LEVEL, PAD, INK_FLOOR },
+);
+
+await browser.close();
 
 const maskDir = resolve(`public/assets/masks/${slug}`);
 const lineDir = resolve(`public/assets/lineart/${slug}`);
@@ -72,91 +240,73 @@ for (const dir of [maskDir, lineDir]) {
   mkdirSync(dir, { recursive: true });
 }
 
-/** getBBox excludes the stroke, so grow the crop by half the stroke plus padding. */
-function cropBox(part) {
-  const grow = part.strokeWidth / 2 + PAD;
-  const x = Math.max(0, Math.floor(part.raw.x - grow));
-  const y = Math.max(0, Math.floor(part.raw.y - grow));
-  return {
-    x,
-    y,
-    w: Math.min(texW - x, Math.ceil(part.raw.w + grow * 2)),
-    h: Math.min(texH - y, Math.ceil(part.raw.h + grow * 2)),
-  };
-}
+const decode = (dataUrl) => Buffer.from(dataUrl.split(",")[1], "base64");
 
-async function shoot(markup, box, outPath) {
-  await page.setViewportSize({ width: box.w, height: box.h });
-  await page.setContent(
-    `<style>html,body{margin:0;background:transparent}svg{display:block}</style>
-     <svg xmlns="http://www.w3.org/2000/svg" width="${box.w}" height="${box.h}"
-          viewBox="${box.x} ${box.y} ${box.w} ${box.h}">${markup}</svg>`,
-    { waitUntil: "load" },
-  );
-  await page.screenshot({ path: outPath, omitBackground: true });
-}
+const rigParts = built.results
+  .map((part) => {
+    writeFileSync(`${maskDir}/${part.id}.png`, decode(part.mask));
+    writeFileSync(`${lineDir}/${part.id}.png`, decode(part.lineart));
+    return {
+      id: part.id,
+      parent: part.parent,
+      pivot: part.pivot,
+      z: part.z,
+      box: part.box,
+      mask: `/assets/masks/${slug}/${part.id}.png`,
+      lineart: `/assets/lineart/${slug}/${part.id}.png`,
+    };
+  })
+  .sort((a, b) => a.z - b.z);
 
-const parts = [];
-for (const part of meta.parts) {
-  const box = cropBox(part);
-  const stroke = part.strokeWidth;
-
-  // Mask: silhouette including the outline, so the stroke belongs to the part.
-  await shoot(
-    `<path d="${part.d}" fill="#000" stroke="#000" stroke-width="${stroke}"
-           stroke-linejoin="round" stroke-linecap="round"/>`,
-    box,
-    `${maskDir}/${part.id}.png`,
-  );
-
-  // Line art: this part's outline, plus any detail strokes falling inside it.
-  await shoot(
-    `<defs><clipPath id="c"><path d="${part.d}"/></clipPath></defs>
-     <g clip-path="url(#c)" fill="none" stroke="#111111" stroke-width="5"
-        stroke-linejoin="round" stroke-linecap="round">${detailMarkup}</g>
-     <path d="${part.d}" fill="none" stroke="#111111" stroke-width="${stroke}"
-           stroke-linejoin="round" stroke-linecap="round"/>`,
-    box,
-    `${lineDir}/${part.id}.png`,
-  );
-
-  parts.push({
-    id: part.id,
-    parent: part.parent,
-    pivot: part.pivot,
-    z: part.z,
-    box,
-    mask: `/assets/masks/${slug}/${part.id}.png`,
-    lineart: `/assets/lineart/${slug}/${part.id}.png`,
-  });
-}
-
-await browser.close();
-
-parts.sort((a, b) => a.z - b.z);
-
-const byId = new Set(parts.map((p) => p.id));
-for (const p of parts) {
+const byId = new Set(rigParts.map((p) => p.id));
+for (const p of rigParts) {
   if (p.parent && !byId.has(p.parent)) {
     throw new Error(`part "${p.id}" names unknown parent "${p.parent}"`);
   }
 }
-const roots = parts.filter((p) => !p.parent);
-if (roots.length !== 1) {
-  throw new Error(`expected exactly one root part, found ${roots.length}`);
+if (rigParts.filter((p) => !p.parent).length !== 1) {
+  throw new Error("expected exactly one root part");
 }
 
 mkdirSync(resolve("world/rigs"), { recursive: true });
 const outPath = resolve(`world/rigs/${slug}.json`);
 writeFileSync(
   outPath,
-  `${JSON.stringify({ slug, texture: { w: texW, h: texH }, parts }, null, 2)}\n`,
+  `${JSON.stringify(
+    {
+      slug,
+      texture: CANVAS,
+      // Where the printed drawing sits inside the canonical texture. The print page
+      // reads this too, so the sheet and the rig cannot drift apart.
+      artwork: { src: artworkSrc, ...built.placement },
+      parts: rigParts,
+    },
+    null,
+    2,
+  )}\n`,
 );
 
-console.log(`${slug}: ${parts.length} parts -> ${outPath}`);
-for (const p of parts) {
+if (process.env.RIG_DEBUG) {
+  writeFileSync(resolve(process.env.RIG_DEBUG), decode(built.debug));
+  console.log(`  debug overlay -> ${process.env.RIG_DEBUG}`);
+}
+
+const missed = (built.unclaimed / built.silhouettePixels) * 100;
+console.log(`${slug}: ${rigParts.length} parts -> ${outPath}`);
+console.log(
+  `  artwork ${Math.round(built.placement.w)}x${Math.round(built.placement.h)} ` +
+    `at ${Math.round(built.placement.x)},${Math.round(built.placement.y)}`,
+);
+for (const p of rigParts) {
   console.log(
     `  z${p.z} ${p.id.padEnd(14)} parent=${String(p.parent).padEnd(6)} ` +
       `box=${p.box.w}x${p.box.h} @${p.box.x},${p.box.y}`,
+  );
+}
+console.log(`  unclaimed silhouette: ${missed.toFixed(2)}%`);
+if (missed > 1) {
+  console.error(
+    `  WARNING: ${missed.toFixed(2)}% of the drawing belongs to no part and will be ` +
+      `missing on screen. Widen the polygons in assets/dino/${slug}.svg.`,
   );
 }

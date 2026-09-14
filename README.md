@@ -36,24 +36,42 @@ away from where the scanner expects it.
 5. That texture goes through a 60-second relay to the screen, which cuts it into rigged
    body parts and walks it into the valley.
 
+The phone flow is three explicit steps — aim, shutter, send — not a loop that fires on
+its own. The viewfinder calls `locateSheet`, which stops short of the warp: it exists
+to draw an outline and say what to fix, and warping a megapixel per frame to throw it
+away is most of the cost of a frame. The full capture runs once, on the shutter.
+
 ### The box is the fiducial
 
 The dinosaur sits inside a box for design reasons. That box is also the best possible
 perspective marker: four high-contrast corners spanning the whole sheet. The design
 requirement and the hardest technical requirement turn out to be the same object.
 
-### The SVG is the rig
+### The drawing decides its own outline
 
-`assets/dino/triceratops.svg` is both the printed line art and the rig definition. Each
-body part is a named path carrying its pivot, parent bone and draw order:
+The printed artwork is a PNG (`public/assets/dino/triceratops.png`).
+`assets/dino/triceratops.svg` does not draw anything — it only says which bone owns
+which region:
 
 ```xml
-<path id="part-head" data-parent="frill" data-pivot="800,340" data-z="5" d="..."/>
+<polygon id="part-head" data-parent="frill" data-pivot="900,360" data-z="5" points="…"/>
 ```
 
-`node scripts/buildRig.mjs triceratops` turns that one file into the rig JSON, the
-per-part alpha masks and the per-part line art. Rig outputs are committed because the
-build needs Playwright and Chromium, which Vercel's build step does not have.
+A mask hand-traced around a raster outline is wrong in one direction or the other:
+overshoot the ink and bare paper becomes part of the animal, undershoot and the
+outline is clipped. So `scripts/buildRig.mjs` derives the silhouette from the artwork
+itself, flooding inwards from the border — whatever the flood cannot reach is the
+dinosaur. Each part's mask is that silhouette intersected with its polygon, so the
+**outer** edge always follows the printed line exactly and the polygons only have to
+be right about where one bone hands over to the next. Those boundaries are interior,
+so being a few pixels out is invisible.
+
+The build reports how much of the drawing no polygon claimed, and warns above 1% —
+unclaimed ink is simply missing from the dinosaur on screen. `RIG_DEBUG=out.png`
+renders the artwork with those gaps picked out in red.
+
+Rig outputs are committed because the build needs Playwright and Chromium, which
+Vercel's build step does not have.
 
 The masks are what make messy colouring look deliberate: a child who scribbles far
 outside the lines still gets a crisp silhouette.
@@ -89,6 +107,10 @@ npm test                                  # unit + synthetic capture harness
 node scripts/e2eCapture.mjs               # photographs the real print route at 3 angles
 node scripts/e2eLoop.mjs                  # print → colour → photo → relay → screen
 node scripts/previewRig.mjs triceratops out.png   # rig composited over a test texture
+
+# Drive the real /scan page, fake camera and all
+node scripts/makeFakeCam.mjs photo.png /tmp/cam.y4m
+node scripts/e2eScan.mjs /tmp/cam.y4m
 ```
 
 The end-to-end scripts need `npm run dev` running. They caught several defects the unit
@@ -109,18 +131,23 @@ middle of the drawing.
 
 ## Artwork
 
-The dinosaur line art is hand-authored SVG, because a rig needs exact part geometry and
-generated art does not have it.
-
-World layers are Magnific art, generated then **downloaded and committed by hand** — the
-session that builds this cannot reach the image CDN. Drop them in as:
+Both the dinosaur and the valley are supplied art:
 
 ```
-public/assets/world/{sky,mountains,hills,treeline,ground,foreground}.png
+public/assets/dino/triceratops.png   the printed colouring page
+public/assets/world/valley.webp      the painted backdrop
 ```
 
-Anything absent falls back to the procedural scenery in `world/procedural.ts`, which is
-built to be good enough to run an installation on.
+Originals are kept in `assets/source/`. To swap either, replace the file and re-run
+`node scripts/buildRig.mjs triceratops` — the rig JSON records where the artwork sits
+inside the box, and the print page reads that same record, so the sheet and the
+scanner cannot drift apart.
+
+If the backdrop is missing the renderer falls back to the procedural scenery in
+`world/procedural.ts`, which is built to be good enough to run an installation on.
+The bottom strip of the backdrop is drawn again in front of the dinosaurs, so the
+nearest ones stand *in* the meadow rather than on top of it — same pixels, so it
+costs no extra art and cannot mismatch.
 
 ## Not done yet
 

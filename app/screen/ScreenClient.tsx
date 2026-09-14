@@ -9,6 +9,7 @@ import type { DinoType } from "@/lib/sheet/types";
 import rigData from "@/world/rigs/triceratops.json";
 import { decodeTexture } from "@/world/composite";
 import { makeDemoColouring } from "@/world/demo";
+import { loadBackdrop } from "@/world/procedural";
 import type { Rig } from "@/world/types";
 import { World, fitStage } from "@/world/World";
 
@@ -59,7 +60,10 @@ export default function ScreenClient() {
 
       host.appendChild(app.canvas);
 
-      const world = new World(app, { rig: rigData as Rig });
+      const world = new World(app, {
+        rig: rigData as Rig,
+        backdrop: await loadBackdrop(),
+      });
       worldRef.current = world;
 
       fitStage(app);

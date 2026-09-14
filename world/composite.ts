@@ -80,9 +80,11 @@ function compositePart(
   }
 
   // 3. A soft highlight along the lit edge, for the other half of the roundness.
+  //    Kept restrained: "lighter" adds, and crayon on white paper is already a light
+  //    subject, so a strong pass here washes a child's colours out to nearly nothing.
   const light = ctx.createLinearGradient(0, 0, w * 0.8, h);
-  light.addColorStop(0, "rgba(255,252,240,0.30)");
-  light.addColorStop(0.5, "rgba(255,255,255,0)");
+  light.addColorStop(0, "rgba(255,250,232,0.16)");
+  light.addColorStop(0.45, "rgba(255,255,255,0)");
   ctx.globalCompositeOperation = "lighter";
   ctx.fillStyle = light;
   ctx.fillRect(0, 0, w, h);

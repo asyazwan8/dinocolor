@@ -1,8 +1,16 @@
-import { Application, Container, Graphics, Sprite, Texture, type Ticker } from "pixi.js";
+import {
+  Application,
+  Container,
+  Graphics,
+  Rectangle,
+  Sprite,
+  Texture,
+  type Ticker,
+} from "pixi.js";
 import { dinoScale, type DinoType } from "@/lib/sheet/types";
 import { compositeRig } from "./composite";
 import { DinoRig } from "./DinoRig";
-import { HORIZON_Y, LANES, REFERENCE_TREE_LANE, STAGE } from "./palette";
+import { FOREGROUND_STRIP, HORIZON_Y, LANES, REFERENCE_TREE_LANE, STAGE } from "./palette";
 import {
   makeClouds,
   makeForeground,
@@ -60,6 +68,8 @@ interface LiveDino {
 
 export interface WorldOptions {
   rig: Rig;
+  /** The painted valley. Absent falls back to the procedural layers. */
+  backdrop?: HTMLImageElement | null;
   /** Reduced motion, for a venue that needs the screen calmer. */
   calm?: boolean;
 }
@@ -75,13 +85,51 @@ export class World {
     options: WorldOptions,
   ) {
     this.rig = options.rig;
-    this.buildScenery();
+    this.buildScenery(options.backdrop ?? null);
     this.app.ticker.add(this.tick);
   }
 
-  private buildScenery(): void {
+  private buildScenery(backdrop: HTMLImageElement | null): void {
     const stage = this.app.stage;
-    const sprite = (canvas: HTMLCanvasElement) => new Sprite(Texture.from(canvas));
+    const sprite = (source: HTMLCanvasElement) => new Sprite(Texture.from(source));
+
+    this.dinoLayer.sortableChildren = true;
+
+    if (backdrop) {
+      const painted = new Sprite(Texture.from(backdrop));
+      painted.width = STAGE.w;
+      painted.height = STAGE.h;
+      stage.addChild(painted);
+
+      // Clouds still drift, because a completely still sky reads as a photograph
+      // rather than a place. Kept faint so it does not fight the painting.
+      this.clouds = sprite(makeClouds());
+      this.clouds.y = 20;
+      this.clouds.alpha = 0.35;
+      stage.addChild(this.clouds);
+
+      stage.addChild(this.dinoLayer);
+
+      // The bottom of the painting, drawn again in front of the dinosaurs, so the
+      // nearest ones stand IN the meadow rather than on top of it. Same pixels as
+      // the backdrop behind, so it costs no extra art and cannot mismatch.
+      const grass = new Sprite(
+        new Texture({
+          source: Texture.from(backdrop).source,
+          frame: new Rectangle(
+            0,
+            backdrop.naturalHeight * (1 - FOREGROUND_STRIP / STAGE.h),
+            backdrop.naturalWidth,
+            backdrop.naturalHeight * (FOREGROUND_STRIP / STAGE.h),
+          ),
+        }),
+      );
+      grass.width = STAGE.w;
+      grass.height = FOREGROUND_STRIP;
+      grass.y = STAGE.h - FOREGROUND_STRIP;
+      stage.addChild(grass);
+      return;
+    }
 
     stage.addChild(sprite(makeSky()));
 
@@ -95,8 +143,7 @@ export class World {
 
     // Dinosaurs and the reference trees share one sorted layer so a near dinosaur
     // passes in front of a tree and a far one behind it. Baking the trees into a
-    // flat backdrop would force every dinosaur to one side of them.
-    this.dinoLayer.sortableChildren = true;
+    // flat layer would force every dinosaur to one side of them.
     stage.addChild(this.dinoLayer);
 
     const trees = sprite(makeTreeline());
