@@ -76,6 +76,13 @@ export const REFERENCE_TREE_LANE = 2;
 /** The painted valley, and the strip of it redrawn in front of the dinosaurs. */
 export const BACKDROP_SRC = "/assets/world/valley.webp";
 export const FOREGROUND_STRIP = 96;
+/**
+ * How much of the strip's upper edge is faded out. A crop has a perfectly straight
+ * top border, and the nearest lane's legs cross it; undimmed it reads as a horizontal
+ * cut through the animal rather than as grass in front of it. Most of the strip, so
+ * the transition is a bank of grass and not a visible band.
+ */
+export const FOREGROUND_FEATHER = 62;
 
 /** Blend two hex colours. Used to fade distant layers into the haze. */
 export function mixHex(from: string, to: string, t: number): string {

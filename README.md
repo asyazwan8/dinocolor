@@ -33,8 +33,8 @@ away from where the scanner expects it.
    geometry far more tightly than the QR alone could.
 4. The two are cross-checked against each other, the shot is gated on quality, and the
    sheet is flattened into a canonical 1200×800 texture and white-balanced.
-5. That texture goes through a 60-second relay to the screen, which cuts it into rigged
-   body parts and walks it into the valley.
+5. That texture goes through a 60-second relay to the screen, which wraps it around a
+   skinned mesh and walks it into the valley.
 
 The phone flow is three explicit steps — aim, shutter, send — not a loop that fires on
 its own. The capture is encoded as WebP where the device can, JPEG where it cannot:
@@ -56,27 +56,51 @@ The printed artwork is a PNG (`public/assets/dino/triceratops.png`).
 which region:
 
 ```xml
-<polygon id="part-head" data-parent="frill" data-pivot="900,360" data-z="5" points="…"/>
+<polygon id="part-head" data-parent="body" data-pivot="718,420" data-z="8" points="…"/>
 ```
 
-A mask hand-traced around a raster outline is wrong in one direction or the other:
-overshoot the ink and bare paper becomes part of the animal, undershoot and the
-outline is clipped. So `scripts/buildRig.mjs` derives the silhouette from the artwork
-itself, flooding inwards from the border — whatever the flood cannot reach is the
-dinosaur. Each part's mask is that silhouette intersected with its polygon, so the
-**outer** edge always follows the printed line exactly and the polygons only have to
-be right about where one bone hands over to the next. Those boundaries are interior,
-so being a few pixels out is invisible.
+A silhouette hand-traced around a raster outline is wrong in one direction or the
+other: overshoot the ink and bare paper becomes part of the animal, undershoot and the
+outline is clipped. So `scripts/buildRig.mjs` derives it from the artwork itself,
+flooding inwards from the border — whatever the flood cannot reach is the dinosaur,
+ink and enclosed white alike. That silhouette is what makes messy colouring look
+deliberate: a child who scribbles far outside the lines still gets a crisp outline.
 
 The build reports how much of the drawing no polygon claimed, and warns above 1% —
-unclaimed ink is simply missing from the dinosaur on screen. `RIG_DEBUG=out.png`
-renders the artwork with those gaps picked out in red.
+unclaimed ink is simply missing from the dinosaur on screen.
 
 Rig outputs are committed because the build needs Playwright and Chromium, which
 Vercel's build step does not have.
 
-The masks are what make messy colouring look deliberate: a child who scribbles far
-outside the lines still gets a crisp silhouette.
+### The dinosaur is never cut up
+
+It bends as one sheet. `buildRig.mjs` lays a grid of vertices over the silhouette,
+binds each to at most three bones, and ships the mesh in `world/rigs/<slug>.json`;
+`world/DinoRig.ts` solves the skeleton each frame and rewrites the vertex buffer.
+
+This replaced a cutout rig, and the reason is worth keeping. Cutouts partition a
+continuous drawing along lines that do not exist in it — the leg masks were boxes
+whose top edge was a straight cut across the belly — so every rotation swung that edge
+through the torso. It looked chopped up, because it was. A mesh has no parts, so it
+has nothing to come apart along.
+
+Weights start as a hard partition from the polygons and are then relaxed by averaging
+each vertex against its grid neighbours, which turns every hand-off into a gradient
+without a single hand-tuned falloff. The pass count is set by the worst joint on the
+sheet, not the gentlest: the two front feet touch, heel to toe, and swing in opposite
+directions, so the triangles bridging them have to absorb the full relative swing of
+two limbs. Too narrow a blend turns those triangles inside out, which renders as black
+shards flickering between the feet.
+
+`RIG_DEBUG=out.png node scripts/buildRig.mjs triceratops` renders the weight field,
+each vertex coloured by its dominant bone and faded by how dominant it is — a
+washed-out patch is a smooth hand-off, a hard colour change is a hinge.
+
+The preview renders a **full stride**, not the rest pose, and `tests/skin.test.ts`
+asserts that no triangle in the mesh inverts, collapses or stretches past a bound
+anywhere in the cycle. Both exist because the rest pose is the one pose that is always
+correct, which is exactly why a rig that tore at the hips passed every check the
+project had.
 
 ## `lib/sheet/geometry.ts` is a contract
 
@@ -108,7 +132,7 @@ empty, and then it expires.
 npm test                                  # unit + synthetic capture harness
 node scripts/e2eCapture.mjs               # photographs the real print route at 3 angles
 node scripts/e2eLoop.mjs                  # print → colour → photo → relay → screen
-node scripts/previewRig.mjs triceratops out.png   # rig composited over a test texture
+npx vite-node scripts/previewRig.mts -- triceratops out.png   # a full stride, posed
 
 # Drive the real /scan page, fake camera and all
 node scripts/makeFakeCam.mjs photo.png /tmp/cam.y4m

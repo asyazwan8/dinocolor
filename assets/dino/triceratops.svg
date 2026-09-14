@@ -1,52 +1,53 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800"
      data-artwork="/assets/dino/triceratops.png">
   <!--
-    Dino Colourise - Triceratops rig definition.
+    Dino Colourise - Triceratops skeleton.
 
-    The printed artwork is the PNG named in data-artwork. This file does NOT draw the
-    dinosaur; it only says which bone each region of that drawing belongs to.
+    The printed artwork is the PNG named in data-artwork. This file does not draw the
+    dinosaur and no longer cuts it up either: the drawing stays whole, and these
+    polygons only say which bone each region of it belongs to.
 
-    Why it is split that way. A mask hand-traced around a raster outline is wrong in
-    one direction or the other: overshoot the ink and bare paper becomes part of the
-    animal, undershoot and the outline is clipped. So buildRig derives the silhouette
-    from the artwork itself, by flooding inwards from the border - everything the
-    flood cannot reach is the dinosaur. Each part's mask is then that silhouette
-    intersected with the polygon below, which means the OUTER edge always follows the
-    printed line exactly and these polygons only have to be right about where one
-    bone hands over to the next. Those boundaries are interior, so being a few pixels
-    out is invisible.
+    That is a weight SEED, not a boundary. buildRig gives every mesh vertex a hard
+    owner from these polygons, then relaxes the field across neighbouring vertices
+    until the hand-offs become gradients. So a polygon has to be roughly right about
+    which limb a region belongs to, and nothing more - a few pixels either way simply
+    shifts where one bone's influence fades into the next.
 
-    Polygons may overlap, and at the joints they should: draw order resolves it, and
-    the overlap is what stops a rotation opening a gap. Between them they must cover
-    the whole silhouette, though - anything claimed by no part is simply missing from
-    the dinosaur on screen.
+    The earlier version cut the drawing into eight masks along these same lines, which
+    is why the legs looked chopped off: the boundaries were straight lines that exist
+    nowhere in the drawing, and rotating a limb swung them across the body. Nothing is
+    cut now, so there is no edge to expose.
 
-    The QR occupies (1040,640)-(1160,760) plus a 20px quiet zone. The artwork leaves
-    that corner empty, so no polygon reaches into it.
+    Two consequences for how they are drawn. Leg polygons stop at the upper thigh
+    rather than reaching into the belly - claiming torso would make the belly swing
+    with the leg. And the frill is part of the head, not its own bone: on a real
+    Triceratops the frill IS the skull, so a joint there could only ever wobble.
+
+    data-z is a tiebreak for overlaps only; limbs sit above the body so a thigh
+    overlapping the torso resolves to the limb.
   -->
   <g id="parts">
-    <polygon id="part-legRearFar" data-parent="body" data-pivot="412,470" data-z="0"
-      points="368,412 470,412 476,570 470,616 462,700 372,700 360,616 356,570"/>
-
-    <polygon id="part-legFrontFar" data-parent="body" data-pivot="712,458" data-z="1"
-      points="636,400 790,400 796,570 790,616 782,700 644,700 632,616 628,570"/>
-
-    <polygon id="part-tail" data-parent="body" data-pivot="392,452" data-z="2"
-      points="44,436 150,392 268,330 366,296 440,300 448,420 444,532 300,540 150,520 40,492"/>
+    <polygon id="part-tail" data-parent="body" data-pivot="360,430" data-z="2"
+      points="44,436 132,398 250,334 344,300 404,306 412,420 404,512 300,532 150,520 40,492"/>
 
     <polygon id="part-body" data-parent="" data-pivot="560,390" data-z="3"
-      points="316,300 392,236 520,182 660,176 760,206 812,268 836,352 840,446 816,530 700,566 520,574 400,552 340,486 312,404"/>
+      points="316,300 392,236 520,182 660,176 760,206 812,268 836,352 840,446
+              816,530 700,566 520,574 400,552 340,486 312,404"/>
 
-    <polygon id="part-frill" data-parent="body" data-pivot="762,398" data-z="4"
-      points="706,268 726,180 790,128 872,126 920,178 932,268 926,352 892,418 812,438 736,414"/>
+    <polygon id="part-legRearFar" data-parent="body" data-pivot="416,486" data-z="4"
+      points="378,466 458,466 464,600 456,668 380,668 372,600"/>
 
-    <polygon id="part-head" data-parent="frill" data-pivot="900,360" data-z="5"
-      points="838,250 900,200 1000,172 1080,168 1160,205 1158,300 1112,330 1150,382 1142,468 1084,540 978,536 884,492 836,420 830,330"/>
+    <polygon id="part-legFrontFar" data-parent="body" data-pivot="706,482" data-z="5"
+      points="642,462 770,462 776,600 764,674 648,674 636,600"/>
 
-    <polygon id="part-legRearNear" data-parent="body" data-pivot="552,474" data-z="6"
-      points="450,416 634,416 640,570 634,618 626,700 484,700 466,618 462,570"/>
+    <polygon id="part-legRearNear" data-parent="body" data-pivot="550,492" data-z="6"
+      points="480,472 620,472 626,600 614,682 490,682 474,600"/>
 
-    <polygon id="part-legFrontNear" data-parent="body" data-pivot="834,450" data-z="7"
-      points="772,392 898,392 906,570 898,618 890,700 782,700 768,618 764,570"/>
+    <polygon id="part-legFrontNear" data-parent="body" data-pivot="837,478" data-z="7"
+      points="788,470 890,470 896,600 886,674 790,674 778,600"/>
+
+    <polygon id="part-head" data-parent="body" data-pivot="718,420" data-z="8"
+      points="684,300 700,190 770,124 880,120 946,170 1040,164 1160,200 1156,300
+              1110,328 1152,380 1144,470 1086,542 970,540 880,486 812,452 700,424"/>
   </g>
 </svg>

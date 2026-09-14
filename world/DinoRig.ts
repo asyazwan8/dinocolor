@@ -1,14 +1,20 @@
-import { Container, Sprite, Texture } from "pixi.js";
-import type { CompositedPart } from "./composite";
-import type { Rig, RigPart } from "./types";
+import { Container, Mesh, MeshGeometry, Texture } from "pixi.js";
+import { BREATH_RATE, cadence, poseGait, type GaitClock } from "./gait";
+import { Skeleton, skinMesh } from "./skin";
+import type { Rig } from "./types";
 
 /**
- * A cutout rig animated procedurally.
+ * A skinned dinosaur, animated procedurally.
  *
- * Procedural rather than a baked sprite sheet because the same body has to walk,
- * slow to a browse, turn around and amble off the edge at a speed that varies per
- * dinosaur. A sheet would need every one of those baked per species; phase-offset
- * sine curves adapt to all of it and cost nothing.
+ * Procedural rather than a baked sprite sheet because the same body has to walk, slow
+ * to a browse, turn around and amble off the edge at a speed that varies per dinosaur.
+ * A sheet would need every one of those baked per species; phase-offset sine curves
+ * adapt to all of it and cost nothing.
+ *
+ * One mesh, not a stack of cutouts. Cutouts partition a drawing along lines that do
+ * not exist in it, so any rotation exposes the cut - the "chopped off" look. Here the
+ * drawing is never divided: the bones bend a continuous sheet of triangles, so a hip
+ * creases rather than coming apart.
  */
 
 export interface RigPose {
@@ -16,24 +22,6 @@ export interface RigPose {
   speed: number;
   /** 1 faces right, -1 faces left. */
   facing: 1 | -1;
-}
-
-interface Bone {
-  part: RigPart;
-  container: Container;
-  /** Offset from the bone's own pivot to its parent's, in canonical pixels. */
-  offset: { x: number; y: number };
-}
-
-/** Diagonal gait: the front leg on one side swings with the rear leg on the other. */
-function legPhase(id: string): number {
-  const front = id.includes("Front");
-  const near = id.includes("Near");
-  return front === near ? 0 : Math.PI;
-}
-
-function isLeg(id: string): boolean {
-  return id.startsWith("leg");
 }
 
 export class DinoRig {
@@ -49,154 +37,66 @@ export class DinoRig {
    */
   readonly extent: { left: number; right: number };
 
-  private readonly bones: Bone[] = [];
-  private readonly root: Bone;
-  /** Parents before children. Fixed by the skeleton, so solved once. */
-  private readonly ordered: Bone[];
-  private phase = Math.random() * Math.PI * 2;
-  private breath = Math.random() * Math.PI * 2;
+  private readonly rig: Rig;
+  private readonly skeleton: Skeleton;
+  private readonly mesh: Mesh;
+  private readonly geometry: MeshGeometry;
+  private readonly texture: Texture;
+  /** Local rotation per bone, rewritten each frame rather than reallocated. */
+  private readonly rotation: Float32Array;
+  /** Bone ids in index order, so the gait can switch on them without a lookup. */
+  private readonly ids: string[];
 
-  constructor(rig: Rig, parts: CompositedPart[]) {
-    const byId = new Map<string, Bone>();
+  // Random start, so ten dinosaurs on one screen are not a chorus line.
+  private readonly clock: GaitClock = {
+    phase: Math.random() * Math.PI * 2,
+    breath: Math.random() * Math.PI * 2,
+  };
 
-    for (const { part, canvas } of parts) {
-      const container = new Container();
-      const sprite = new Sprite(Texture.from(canvas));
-      // The sprite hangs off the pivot, so rotating the container swings the part
-      // about its joint rather than about its own corner.
-      sprite.position.set(part.box.x - part.pivot.x, part.box.y - part.pivot.y);
-      container.addChild(sprite);
+  constructor(rig: Rig, colouring: HTMLCanvasElement) {
+    this.rig = rig;
+    this.skeleton = new Skeleton(rig.bones);
+    this.rotation = new Float32Array(rig.bones.length);
+    this.ids = rig.bones.map((b) => b.id);
 
-      const bone: Bone = { part, container, offset: { x: 0, y: 0 } };
-      byId.set(part.id, bone);
-      this.bones.push(bone);
-    }
+    this.footDrop = rig.footDrop;
+    this.extent = rig.extent;
 
-    for (const bone of this.bones) {
-      const parent = bone.part.parent ? byId.get(bone.part.parent) : undefined;
-      if (parent) {
-        bone.offset = {
-          x: bone.part.pivot.x - parent.part.pivot.x,
-          y: bone.part.pivot.y - parent.part.pivot.y,
-        };
-      }
-    }
+    this.geometry = new MeshGeometry({
+      positions: Float32Array.from(rig.mesh.positions),
+      uvs: Float32Array.from(rig.mesh.uvs),
+      indices: Uint32Array.from(rig.mesh.indices),
+    });
 
-    const root = this.bones.find((b) => !b.part.parent);
-    if (!root) throw new Error(`rig ${rig.slug} has no root part`);
-    this.root = root;
+    this.texture = Texture.from(colouring);
+    this.mesh = new Mesh({ geometry: this.geometry, texture: this.texture });
+    this.container.addChild(this.mesh);
 
-    // Parts are added as flat siblings in z order, not nested by bone. Nesting would
-    // tie draw order to the skeleton, and the skeleton disagrees with it: the far
-    // legs hang off the body but must be drawn behind it, the near legs in front.
-    for (const bone of [...this.bones].sort((a, b) => a.part.z - b.part.z)) {
-      this.container.addChild(bone.container);
-    }
-
-    this.footDrop =
-      Math.max(...parts.map((p) => p.part.box.y + p.part.box.h)) - root.part.pivot.y;
-
-    this.ordered = this.solveEvaluationOrder();
-
-    this.extent = {
-      left: Math.min(...parts.map((p) => p.part.box.x)) - root.part.pivot.x,
-      right: Math.max(...parts.map((p) => p.part.box.x + p.part.box.w)) - root.part.pivot.x,
-    };
+    // Straight into a pose, so the first frame drawn is already in root-pivot space
+    // rather than in raw texture coordinates.
+    this.solve(0);
   }
 
-  /** Parents before children, so a bone's parent transform is always already solved. */
-  private solveEvaluationOrder(): Bone[] {
-    const done = new Set<string>();
-    const ordered: Bone[] = [];
-    let remaining = [...this.bones];
-
-    while (remaining.length) {
-      const ready = remaining.filter((b) => !b.part.parent || done.has(b.part.parent));
-      if (!ready.length) break;
-      for (const bone of ready) {
-        ordered.push(bone);
-        done.add(bone.part.id);
-      }
-      remaining = remaining.filter((b) => !done.has(b.part.id));
-    }
-
-    return ordered;
+  /** Solve the skeleton for the current clock and rewrite the vertex buffer. */
+  private solve(speed: number): void {
+    const bob = poseGait(this.ids, this.skeleton.rootIndex, this.clock, speed, this.rotation);
+    const bones = this.skeleton.solve(this.rotation, 0, bob);
+    skinMesh(this.rig.mesh, bones, this.geometry.positions);
+    this.geometry.getBuffer("aPosition").update();
   }
 
   update(dt: number, pose: RigPose): void {
-    // Cadence rises with speed but not linearly: a faster dinosaur takes longer
-    // strides as well as quicker ones, which is what stops a fast walk reading as a
-    // scuttle. Slow overall, because this is a heavy animal - a brisk cadence on a
-    // body this size reads as a scurry.
-    this.phase += dt * (1.35 + pose.speed * 2.1);
-    this.breath += dt * 0.85;
+    this.clock.phase += dt * cadence(pose.speed);
+    this.clock.breath += dt * BREATH_RATE;
 
-    const swing = pose.speed;
-    const localRotation = (bone: Bone): number => {
-      const id = bone.part.id;
-      if (isLeg(id)) {
-        const far = id.includes("Far");
-        // Warping the phase makes the leg linger at the back of its swing and come
-        // forward more briskly, which is roughly what a planted foot does. A plain
-        // sine spends equal time either side and reads as a pendulum.
-        const t = this.phase + legPhase(id);
-        const warped = t + 0.28 * Math.sin(t);
-        // Shallow: a heavy animal barely lifts its feet, and a big swing on a rig
-        // without a knee just looks like the leg is detaching.
-        return Math.sin(warped) * 0.26 * swing * (far ? 0.84 : 1);
-      }
-      if (id === "tail") {
-        // Slower than the gait and slightly behind it, so the tail trails the body
-        // rather than beating time with the legs.
-        return Math.sin(this.phase * 0.42 - 0.7) * (0.05 + 0.075 * swing) + 0.03;
-      }
-      if (id === "frill") {
-        return Math.sin(this.phase + Math.PI) * 0.022 * swing;
-      }
-      if (id === "head") {
-        // Leads the stride a little, and keeps breathing when standing still.
-        return (
-          Math.sin(this.phase * 0.5 + 0.9) * 0.035 * swing + Math.sin(this.breath) * 0.014
-        );
-      }
-      return 0;
-    };
-
-    const world = new Map<string, { x: number; y: number; rot: number }>();
-
-    for (const bone of this.ordered) {
-      const rot = localRotation(bone);
-
-      if (!bone.part.parent) {
-        // Body bob happens at twice the leg cadence: one rise per footfall, not per
-        // stride. Plus a slow breath so a standing dinosaur is never quite still.
-        const bob = Math.sin(this.phase * 2) * 3.2 * swing + Math.sin(this.breath) * 1.4;
-        // A little pitch with it. Rising and falling without any tilt reads as the
-        // whole animal being winched up and down.
-        const pitch = Math.sin(this.phase * 2 + 0.6) * 0.012 * swing;
-        world.set(bone.part.id, { x: 0, y: bob, rot: rot + pitch });
-      } else {
-        const parent = world.get(bone.part.parent);
-        if (!parent) continue;
-        const cos = Math.cos(parent.rot);
-        const sin = Math.sin(parent.rot);
-        world.set(bone.part.id, {
-          x: parent.x + bone.offset.x * cos - bone.offset.y * sin,
-          y: parent.y + bone.offset.x * sin + bone.offset.y * cos,
-          rot: parent.rot + rot,
-        });
-      }
-
-      const solved = world.get(bone.part.id);
-      if (!solved) continue;
-      bone.container.position.set(solved.x, solved.y);
-      bone.container.rotation = solved.rot;
-    }
-
+    this.solve(pose.speed);
     this.container.scale.x = pose.facing;
   }
 
   destroy(): void {
-    this.container.destroy({ children: true, texture: true });
+    this.container.destroy({ children: true });
+    // The composited colouring belongs to this dinosaur alone, so it goes with it.
+    // The shared species layers it was built from are cached elsewhere and survive.
+    this.texture.destroy(true);
   }
 }

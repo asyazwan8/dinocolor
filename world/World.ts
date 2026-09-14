@@ -2,7 +2,6 @@ import {
   Application,
   Container,
   Graphics,
-  Rectangle,
   Sprite,
   Texture,
   type Ticker,
@@ -10,7 +9,14 @@ import {
 import { dinoScale, type DinoType } from "@/lib/sheet/types";
 import { compositeRig } from "./composite";
 import { DinoRig } from "./DinoRig";
-import { FOREGROUND_STRIP, HORIZON_Y, LANES, REFERENCE_TREE_LANE, STAGE } from "./palette";
+import {
+  FOREGROUND_FEATHER,
+  FOREGROUND_STRIP,
+  HORIZON_Y,
+  LANES,
+  REFERENCE_TREE_LANE,
+  STAGE,
+} from "./palette";
 import {
   makeClouds,
   makeForeground,
@@ -74,6 +80,48 @@ export interface WorldOptions {
   calm?: boolean;
 }
 
+/**
+ * The bottom strip of the painting, cut out and faded along its top edge, ready to be
+ * drawn again in front of the dinosaurs.
+ *
+ * The fade is the whole point: the same pixels drawn twice put the nearest dinosaurs
+ * IN the meadow, but a rectangular crop brings a perfectly straight upper border with
+ * it, and that border runs across their shins.
+ */
+function featherTop(backdrop: HTMLImageElement): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = STAGE.w;
+  canvas.height = FOREGROUND_STRIP;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2d context unavailable");
+
+  const top = backdrop.naturalHeight * (1 - FOREGROUND_STRIP / STAGE.h);
+  ctx.drawImage(
+    backdrop,
+    0,
+    top,
+    backdrop.naturalWidth,
+    backdrop.naturalHeight - top,
+    0,
+    0,
+    STAGE.w,
+    FOREGROUND_STRIP,
+  );
+
+  // Covers the full height, not just the feathered band: destination-in erases
+  // wherever the source is absent, so a gradient painted over the top alone would
+  // take the rest of the strip with it.
+  const fade = ctx.createLinearGradient(0, 0, 0, FOREGROUND_STRIP);
+  fade.addColorStop(0, "rgba(0,0,0,0)");
+  fade.addColorStop(FOREGROUND_FEATHER / FOREGROUND_STRIP, "rgba(0,0,0,1)");
+  fade.addColorStop(1, "rgba(0,0,0,1)");
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.fillStyle = fade;
+  ctx.fillRect(0, 0, STAGE.w, FOREGROUND_STRIP);
+
+  return canvas;
+}
+
 export class World {
   private readonly dinos: LiveDino[] = [];
   private readonly dinoLayer = new Container();
@@ -113,19 +161,13 @@ export class World {
       // The bottom of the painting, drawn again in front of the dinosaurs, so the
       // nearest ones stand IN the meadow rather than on top of it. Same pixels as
       // the backdrop behind, so it costs no extra art and cannot mismatch.
-      const grass = new Sprite(
-        new Texture({
-          source: Texture.from(backdrop).source,
-          frame: new Rectangle(
-            0,
-            backdrop.naturalHeight * (1 - FOREGROUND_STRIP / STAGE.h),
-            backdrop.naturalWidth,
-            backdrop.naturalHeight * (FOREGROUND_STRIP / STAGE.h),
-          ),
-        }),
-      );
-      grass.width = STAGE.w;
-      grass.height = FOREGROUND_STRIP;
+      //
+      // Feathered along its top edge, because a rectangular crop has a perfectly
+      // straight upper border and the nearest lane's legs cross it: undimmed, it cuts
+      // a horizontal line through the animal's shins that looks exactly like the
+      // thing this rig exists to avoid. The fade makes it read as grass standing in
+      // front of the legs instead.
+      const grass = sprite(featherTop(backdrop));
       grass.y = STAGE.h - FOREGROUND_STRIP;
       stage.addChild(grass);
       return;
@@ -164,8 +206,8 @@ export class World {
     /** Fraction across the stage to start at. Omit to walk in from the edge. */
     startAt?: number,
   ): Promise<void> {
-    const parts = await compositeRig(this.rig, colouring);
-    const rig = new DinoRig(this.rig, parts);
+    const skin = await compositeRig(this.rig, colouring);
+    const rig = new DinoRig(this.rig, skin);
 
     // Spread arrivals across lanes so the screen fills in depth, not in a row.
     const lane = this.pickLane();
