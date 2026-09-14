@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { sanitizeSession } from "@/lib/relay/types";
 import { DINOS } from "@/lib/sheet/types";
-import { encodeWebp, grabFrame, openRearCamera, stopStream, toCanvas } from "@/lib/vision/browser";
+import { encodeTexture, grabFrame, openRearCamera, stopStream, toCanvas } from "@/lib/vision/browser";
 import { captureFromFrame, locateSheet } from "@/lib/vision/pipeline";
 
 /**
@@ -131,7 +131,7 @@ export default function ScanClient() {
 
     const canvas = toCanvas(result.texture);
     shotRef.current = {
-      texture: encodeWebp(canvas),
+      texture: encodeTexture(canvas).dataUrl,
       dino: result.code.dino,
       serial: result.code.serial,
     };

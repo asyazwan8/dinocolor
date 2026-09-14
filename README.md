@@ -37,7 +37,9 @@ away from where the scanner expects it.
    body parts and walks it into the valley.
 
 The phone flow is three explicit steps — aim, shutter, send — not a loop that fires on
-its own. The viewfinder calls `locateSheet`, which stops short of the warp: it exists
+its own. The capture is encoded as WebP where the device can, JPEG where it cannot:
+`toDataURL` has no way to refuse a format it does not support and quietly returns PNG
+instead, so what came back is checked rather than assumed. The viewfinder calls `locateSheet`, which stops short of the warp: it exists
 to draw an outline and say what to fix, and warping a megapixel per frame to throw it
 away is most of the cost of a frame. The full capture runs once, on the shutter.
 

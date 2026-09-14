@@ -5,7 +5,7 @@ export interface DinoEvent {
   id: string;
   dino: DinoType;
   serial: string;
-  /** WebP data URL of the rectified canonical texture. */
+  /** Data URL of the rectified canonical texture; WebP, JPEG or PNG. */
   texture: string;
   ts: number;
 }

@@ -52,11 +52,32 @@ export function toCanvas(image: RgbaImage): HTMLCanvasElement {
 }
 
 /**
- * WebP at 0.82 puts a rectified sheet around 70-130KB - small enough to move
- * through the relay in one message, detailed enough that crayon texture survives.
+ * Formats to try, best first. WebP at 0.82 puts a rectified sheet around 70-130KB;
+ * JPEG is larger but is the one format every canvas is required to encode.
  */
-export function encodeWebp(canvas: HTMLCanvasElement, quality = 0.82): string {
-  return canvas.toDataURL("image/webp", quality);
+const TEXTURE_FORMATS = ["image/webp", "image/jpeg"] as const;
+
+export interface EncodedTexture {
+  dataUrl: string;
+  mime: string;
+}
+
+/**
+ * Encode the rectified sheet, and report what was actually produced.
+ *
+ * toDataURL has no way to say no: asked for a type it cannot encode it quietly
+ * returns a PNG instead. Assuming WebP therefore fails on devices that cannot encode
+ * it - older iOS Safari among them - by sending a PNG labelled as nothing in
+ * particular, which the relay then rejects, and by ballooning a photo to several
+ * megabytes on the way. So each candidate is checked against what came back.
+ */
+export function encodeTexture(canvas: HTMLCanvasElement, quality = 0.82): EncodedTexture {
+  for (const mime of TEXTURE_FORMATS) {
+    const dataUrl = canvas.toDataURL(mime, quality);
+    if (dataUrl.startsWith(`data:${mime};`)) return { dataUrl, mime };
+  }
+  // Only reachable if a canvas refuses JPEG, which the HTML spec does not allow.
+  return { dataUrl: canvas.toDataURL("image/png"), mime: "image/png" };
 }
 
 export async function openRearCamera(video: HTMLVideoElement): Promise<MediaStream> {

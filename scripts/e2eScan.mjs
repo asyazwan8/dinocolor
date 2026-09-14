@@ -12,7 +12,14 @@
 import { chromium } from "playwright";
 import { resolve } from "node:path";
 
-const [, , clip, base = "http://localhost:3000"] = process.argv;
+const args = process.argv.slice(2);
+/**
+ * Simulate a device with no WebP encoder, which is how this flow first broke on a
+ * real phone: toDataURL cannot report failure, so an unsupported type comes back as
+ * PNG and the relay refuses it.
+ */
+const noWebp = args.includes("--no-webp");
+const [clip, base = "http://localhost:3000"] = args.filter((a) => !a.startsWith("--"));
 if (!clip) {
   console.error("usage: node scripts/e2eScan.mjs <clip.y4m> [baseUrl]");
   process.exit(1);
@@ -35,8 +42,20 @@ const context = await browser.newContext({
   viewport: { width: 420, height: 860 },
   permissions: ["camera"],
 });
+if (noWebp) {
+  await context.addInitScript(() => {
+    const real = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function (type, ...rest) {
+      // Exactly what a canvas without the encoder does: ignore the request, give PNG.
+      if (type === "image/webp") return real.call(this, "image/png");
+      return real.call(this, type, ...rest);
+    };
+  });
+}
+
 const page = await context.newPage();
 page.on("pageerror", (e) => console.log("  [page error]", String(e).slice(0, 200)));
+if (noWebp) console.log("  simulating a device with no WebP encoder");
 
 const step = async (name) => {
   await page.screenshot({ path: `${OUT}/scan-${name}.png` });
