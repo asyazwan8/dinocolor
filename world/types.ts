@@ -16,6 +16,8 @@ export interface RigPart {
   box: RigBox;
   mask: string;
   lineart: string;
+  /** Slice of the whole-body form shading, baked at build time. */
+  shade: string;
 }
 
 export interface Rig {

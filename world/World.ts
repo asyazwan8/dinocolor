@@ -26,7 +26,7 @@ import type { Rig } from "./types";
 export const MAX_DINOS = 10;
 
 /** Stage pixels per second at a normal walking pace, before lane scaling. */
-const WALK_SPEED = 58;
+const WALK_SPEED = 40;
 
 /**
  * Arrivals stride in rather than amble.
@@ -292,22 +292,35 @@ export class World {
       case "enter": {
         const inside = dino.x - dino.reachLeft > 0 && dino.x + dino.reachRight < STAGE.w;
         if (inside || dino.untilChange <= 0) {
-          dino.behaviour = "wander";
-          dino.targetSpeed = 0.85 + Math.random() * 0.3;
-          dino.untilChange = 4 + Math.random() * 6;
+          // Settle to a browse on arrival: the child who just scanned is watching,
+          // and a dinosaur that stops and looks around is easier to find than one
+          // that keeps marching.
+          dino.behaviour = "browse";
+          dino.targetSpeed = 0;
+          dino.untilChange = 6 + Math.random() * 6;
         }
         break;
       }
       case "wander": {
         if (dino.untilChange <= 0) {
-          // Pausing to browse is what stops ten dinosaurs looking like a parade.
-          if (Math.random() < 0.45) {
+          // Weighted heavily towards stopping. A herd that walks whenever it is not
+          // turning round reads as a parade crossing the screen; what makes it look
+          // like animals living somewhere is that most of them are standing about
+          // most of the time.
+          const roll = Math.random();
+          if (roll < 0.62) {
             dino.behaviour = "browse";
             dino.targetSpeed = 0;
-            dino.untilChange = 2.5 + Math.random() * 4;
-          } else {
+            dino.untilChange = 5 + Math.random() * 9;
+          } else if (roll < 0.82) {
             dino.facing = (dino.facing * -1) as 1 | -1;
-            dino.untilChange = 5 + Math.random() * 7;
+            dino.targetSpeed = 0.5 + Math.random() * 0.35;
+            dino.untilChange = 4 + Math.random() * 6;
+          } else {
+            // Carry on, but at a new amble, so they drift apart instead of moving
+            // in step.
+            dino.targetSpeed = 0.45 + Math.random() * 0.45;
+            dino.untilChange = 4 + Math.random() * 7;
           }
         }
         // Turn back rather than walk off the edge unbidden.
@@ -318,8 +331,8 @@ export class World {
       case "browse": {
         if (dino.untilChange <= 0) {
           dino.behaviour = "wander";
-          dino.targetSpeed = 0.8 + Math.random() * 0.4;
-          dino.untilChange = 5 + Math.random() * 7;
+          dino.targetSpeed = 0.45 + Math.random() * 0.45;
+          dino.untilChange = 4 + Math.random() * 7;
         }
         break;
       }
@@ -336,12 +349,43 @@ export class World {
       }
     }
 
+    this.separate(dino, dt);
+
     // Ease towards the target so a dinosaur leans into a stop rather than snapping.
-    dino.speed += (dino.targetSpeed - dino.speed) * Math.min(1, dt * 2.2);
+    // Gentle, because the gait is driven by this: a sharp change in speed makes the
+    // legs visibly jump cadence.
+    dino.speed += (dino.targetSpeed - dino.speed) * Math.min(1, dt * 1.4);
     dino.x += dino.facing * dino.speed * WALK_SPEED * dino.scale * dt;
 
     this.place(dino);
     dino.rig.update(dt, { speed: dino.speed, facing: dino.facing });
+  }
+
+  /**
+   * Nudge apart dinosaurs sharing a lane.
+   *
+   * Two in the same lane at the same x are drawn one flat on top of the other, which
+   * reads as a rendering fault rather than as two animals. Real separation steering
+   * would be overkill here: they only ever move along one axis, so a gentle push
+   * along it is enough, and it is applied to position rather than to intent so it
+   * cannot fight whatever the behaviour state is trying to do.
+   */
+  private separate(dino: LiveDino, dt: number): void {
+    if (dino.behaviour === "enter" || dino.behaviour === "exit") return;
+
+    const spacing = (dino.reachRight + dino.reachLeft) * 0.55;
+    for (const other of this.dinos) {
+      if (other === dino || other.lane !== dino.lane) continue;
+      if (other.behaviour === "enter" || other.behaviour === "exit") continue;
+
+      const gap = dino.x - other.x;
+      const distance = Math.abs(gap);
+      if (distance >= spacing || distance < 0.001) continue;
+
+      // Strongest when they are nearly coincident, fading to nothing at spacing.
+      const push = (1 - distance / spacing) * 26 * dt;
+      dino.x += Math.sign(gap) * push;
+    }
   }
 
   private remove(dino: LiveDino): void {

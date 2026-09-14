@@ -27,7 +27,8 @@
         "h": 265
       },
       "mask": "/assets/masks/triceratops/legRearFar.png",
-      "lineart": "/assets/lineart/triceratops/legRearFar.png"
+      "lineart": "/assets/lineart/triceratops/legRearFar.png",
+      "shade": "/assets/shade/triceratops/legRearFar.png"
     },
     {
       "id": "legFrontFar",
@@ -44,7 +45,8 @@
         "h": 284
       },
       "mask": "/assets/masks/triceratops/legFrontFar.png",
-      "lineart": "/assets/lineart/triceratops/legFrontFar.png"
+      "lineart": "/assets/lineart/triceratops/legFrontFar.png",
+      "shade": "/assets/shade/triceratops/legFrontFar.png"
     },
     {
       "id": "tail",
@@ -61,7 +63,8 @@
         "h": 251
       },
       "mask": "/assets/masks/triceratops/tail.png",
-      "lineart": "/assets/lineart/triceratops/tail.png"
+      "lineart": "/assets/lineart/triceratops/tail.png",
+      "shade": "/assets/shade/triceratops/tail.png"
     },
     {
       "id": "body",
@@ -78,7 +81,8 @@
         "h": 394
       },
       "mask": "/assets/masks/triceratops/body.png",
-      "lineart": "/assets/lineart/triceratops/body.png"
+      "lineart": "/assets/lineart/triceratops/body.png",
+      "shade": "/assets/shade/triceratops/body.png"
     },
     {
       "id": "frill",
@@ -95,7 +99,8 @@
         "h": 309
       },
       "mask": "/assets/masks/triceratops/frill.png",
-      "lineart": "/assets/lineart/triceratops/frill.png"
+      "lineart": "/assets/lineart/triceratops/frill.png",
+      "shade": "/assets/shade/triceratops/frill.png"
     },
     {
       "id": "head",
@@ -112,7 +117,8 @@
         "h": 327
       },
       "mask": "/assets/masks/triceratops/head.png",
-      "lineart": "/assets/lineart/triceratops/head.png"
+      "lineart": "/assets/lineart/triceratops/head.png",
+      "shade": "/assets/shade/triceratops/head.png"
     },
     {
       "id": "legRearNear",
@@ -129,7 +135,8 @@
         "h": 259
       },
       "mask": "/assets/masks/triceratops/legRearNear.png",
-      "lineart": "/assets/lineart/triceratops/legRearNear.png"
+      "lineart": "/assets/lineart/triceratops/legRearNear.png",
+      "shade": "/assets/shade/triceratops/legRearNear.png"
     },
     {
       "id": "legFrontNear",
@@ -146,7 +153,8 @@
         "h": 283
       },
       "mask": "/assets/masks/triceratops/legFrontNear.png",
-      "lineart": "/assets/lineart/triceratops/legFrontNear.png"
+      "lineart": "/assets/lineart/triceratops/legFrontNear.png",
+      "shade": "/assets/shade/triceratops/legFrontNear.png"
     }
   ]
 }

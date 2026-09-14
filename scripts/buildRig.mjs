@@ -37,6 +37,16 @@ const PAD = 6;
 /** Above this luminance the drawing is paper, and drops out of the ink layer. */
 const INK_FLOOR = 238;
 
+/**
+ * Form shading. Restrained on purpose: the drawing's own outline carries the shape,
+ * and depth on screen comes from lane scale and haze. Heavy shading here only
+ * succeeds in dirtying the paper a child left white.
+ */
+const SHADE_STRENGTH = 0.3;
+const SHADE_BLUR = 22;
+/** Light from the upper left, so the band survives along the lower right. */
+const SHADE_OFFSET = { x: 14, y: 18 };
+
 const svg = readFileSync(resolve(`assets/dino/${slug}.svg`), "utf8");
 const artworkSrc = /data-artwork="([^"]+)"/.exec(svg)?.[1];
 if (!artworkSrc) throw new Error(`${slug}.svg has no data-artwork attribute`);
@@ -65,7 +75,7 @@ const parts = await page.evaluate(() =>
 );
 
 const built = await page.evaluate(
-  async ({ parts, artworkDataUrl, CANVAS, PAPER_LEVEL, PAD, INK_FLOOR }) => {
+  async ({ parts, artworkDataUrl, CANVAS, PAPER_LEVEL, PAD, INK_FLOOR, SHADE_STRENGTH, SHADE_BLUR, SHADE_OFFSET }) => {
     const art = new Image();
     art.src = artworkDataUrl;
     await art.decode();
@@ -125,6 +135,29 @@ const built = await page.evaluate(
       silhouettePixels++;
     }
     silCtx.putImageData(sil, 0, 0);
+
+    /**
+     * Form shading, computed once over the WHOLE dinosaur.
+     *
+     * Two reasons it cannot be done per part at runtime. It would shade each part
+     * against its own silhouette, so wherever a part boundary crosses open body the
+     * two sides get different shading and the straight cut shows as a panel edge.
+     * And shading a part by multiplying its whole area darkens the paper too, which
+     * turns a white dinosaur grey - the interior must be left completely alone.
+     *
+     * So: fill dark, punch out the silhouette shifted toward the light, and keep
+     * what survives inside the silhouette. That leaves a soft band along the shaded
+     * edge only, continuous across every seam because it never knew about them.
+     */
+    const [shadeCanvas, shadeCtx] = make(CANVAS.w, CANVAS.h);
+    shadeCtx.fillStyle = `rgba(72, 62, 48, ${SHADE_STRENGTH})`;
+    shadeCtx.fillRect(0, 0, CANVAS.w, CANVAS.h);
+    shadeCtx.globalCompositeOperation = "destination-out";
+    shadeCtx.filter = `blur(${SHADE_BLUR}px)`;
+    shadeCtx.drawImage(silCanvas, -SHADE_OFFSET.x, -SHADE_OFFSET.y);
+    shadeCtx.filter = "none";
+    shadeCtx.globalCompositeOperation = "destination-in";
+    shadeCtx.drawImage(silCanvas, 0, 0);
 
     const claimed = new Uint8Array(CANVAS.w * CANVAS.h);
     const results = [];
@@ -200,11 +233,18 @@ const built = await page.evaluate(
       lineOutCtx.globalCompositeOperation = "destination-in";
       lineOutCtx.drawImage(maskOut, 0, 0);
 
+      // This part's slice of the whole-body shading, clipped to its own silhouette.
+      const [shadeOut, shadeOutCtx] = make(box.w, box.h);
+      shadeOutCtx.drawImage(shadeCanvas, -box.x, -box.y);
+      shadeOutCtx.globalCompositeOperation = "destination-in";
+      shadeOutCtx.drawImage(maskOut, 0, 0);
+
       results.push({
         ...part,
         box,
         mask: maskOut.toDataURL("image/png"),
         lineart: lineOut.toDataURL("image/png"),
+        shade: shadeOut.toDataURL("image/png"),
       });
     }
 
@@ -228,14 +268,15 @@ const built = await page.evaluate(
 
     return { results, placement, silhouettePixels, unclaimed, debug: dbg.toDataURL("image/png") };
   },
-  { parts, artworkDataUrl, CANVAS, PAPER_LEVEL, PAD, INK_FLOOR },
+  { parts, artworkDataUrl, CANVAS, PAPER_LEVEL, PAD, INK_FLOOR, SHADE_STRENGTH, SHADE_BLUR, SHADE_OFFSET },
 );
 
 await browser.close();
 
 const maskDir = resolve(`public/assets/masks/${slug}`);
 const lineDir = resolve(`public/assets/lineart/${slug}`);
-for (const dir of [maskDir, lineDir]) {
+const shadeDir = resolve(`public/assets/shade/${slug}`);
+for (const dir of [maskDir, lineDir, shadeDir]) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
 }
@@ -246,6 +287,7 @@ const rigParts = built.results
   .map((part) => {
     writeFileSync(`${maskDir}/${part.id}.png`, decode(part.mask));
     writeFileSync(`${lineDir}/${part.id}.png`, decode(part.lineart));
+    writeFileSync(`${shadeDir}/${part.id}.png`, decode(part.shade));
     return {
       id: part.id,
       parent: part.parent,
@@ -254,6 +296,7 @@ const rigParts = built.results
       box: part.box,
       mask: `/assets/masks/${slug}/${part.id}.png`,
       lineart: `/assets/lineart/${slug}/${part.id}.png`,
+      shade: `/assets/shade/${slug}/${part.id}.png`,
     };
   })
   .sort((a, b) => a.z - b.z);

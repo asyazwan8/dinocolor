@@ -51,6 +51,8 @@ export class DinoRig {
 
   private readonly bones: Bone[] = [];
   private readonly root: Bone;
+  /** Parents before children. Fixed by the skeleton, so solved once. */
+  private readonly ordered: Bone[];
   private phase = Math.random() * Math.PI * 2;
   private breath = Math.random() * Math.PI * 2;
 
@@ -94,6 +96,8 @@ export class DinoRig {
     this.footDrop =
       Math.max(...parts.map((p) => p.part.box.y + p.part.box.h)) - root.part.pivot.y;
 
+    this.ordered = this.solveEvaluationOrder();
+
     this.extent = {
       left: Math.min(...parts.map((p) => p.part.box.x)) - root.part.pivot.x,
       right: Math.max(...parts.map((p) => p.part.box.x + p.part.box.w)) - root.part.pivot.x,
@@ -101,7 +105,7 @@ export class DinoRig {
   }
 
   /** Parents before children, so a bone's parent transform is always already solved. */
-  private evaluationOrder(): Bone[] {
+  private solveEvaluationOrder(): Bone[] {
     const done = new Set<string>();
     const ordered: Bone[] = [];
     let remaining = [...this.bones];
@@ -122,41 +126,55 @@ export class DinoRig {
   update(dt: number, pose: RigPose): void {
     // Cadence rises with speed but not linearly: a faster dinosaur takes longer
     // strides as well as quicker ones, which is what stops a fast walk reading as a
-    // scuttle.
-    this.phase += dt * (2.2 + pose.speed * 3.4);
-    this.breath += dt * 1.1;
+    // scuttle. Slow overall, because this is a heavy animal - a brisk cadence on a
+    // body this size reads as a scurry.
+    this.phase += dt * (1.35 + pose.speed * 2.1);
+    this.breath += dt * 0.85;
 
     const swing = pose.speed;
     const localRotation = (bone: Bone): number => {
       const id = bone.part.id;
       if (isLeg(id)) {
         const far = id.includes("Far");
-        // Far legs swing slightly less, which reads as depth rather than as a
-        // second pair of legs doing exactly the same thing.
-        return Math.sin(this.phase + legPhase(id)) * 0.42 * swing * (far ? 0.82 : 1);
+        // Warping the phase makes the leg linger at the back of its swing and come
+        // forward more briskly, which is roughly what a planted foot does. A plain
+        // sine spends equal time either side and reads as a pendulum.
+        const t = this.phase + legPhase(id);
+        const warped = t + 0.28 * Math.sin(t);
+        // Shallow: a heavy animal barely lifts its feet, and a big swing on a rig
+        // without a knee just looks like the leg is detaching.
+        return Math.sin(warped) * 0.26 * swing * (far ? 0.84 : 1);
       }
       if (id === "tail") {
-        return Math.sin(this.phase * 0.5) * (0.06 + 0.1 * swing) + 0.04;
+        // Slower than the gait and slightly behind it, so the tail trails the body
+        // rather than beating time with the legs.
+        return Math.sin(this.phase * 0.42 - 0.7) * (0.05 + 0.075 * swing) + 0.03;
       }
       if (id === "frill") {
-        return Math.sin(this.phase + Math.PI) * 0.035 * swing;
+        return Math.sin(this.phase + Math.PI) * 0.022 * swing;
       }
       if (id === "head") {
-        return Math.sin(this.phase * 0.5 + 1) * 0.05 * swing + Math.sin(this.breath) * 0.012;
+        // Leads the stride a little, and keeps breathing when standing still.
+        return (
+          Math.sin(this.phase * 0.5 + 0.9) * 0.035 * swing + Math.sin(this.breath) * 0.014
+        );
       }
       return 0;
     };
 
     const world = new Map<string, { x: number; y: number; rot: number }>();
 
-    for (const bone of this.evaluationOrder()) {
+    for (const bone of this.ordered) {
       const rot = localRotation(bone);
 
       if (!bone.part.parent) {
         // Body bob happens at twice the leg cadence: one rise per footfall, not per
         // stride. Plus a slow breath so a standing dinosaur is never quite still.
-        const bob = Math.sin(this.phase * 2) * 4 * swing + Math.sin(this.breath) * 1.6;
-        world.set(bone.part.id, { x: 0, y: bob, rot });
+        const bob = Math.sin(this.phase * 2) * 3.2 * swing + Math.sin(this.breath) * 1.4;
+        // A little pitch with it. Rising and falling without any tilt reads as the
+        // whole animal being winched up and down.
+        const pitch = Math.sin(this.phase * 2 + 0.6) * 0.012 * swing;
+        world.set(bone.part.id, { x: 0, y: bob, rot: rot + pitch });
       } else {
         const parent = world.get(bone.part.parent);
         if (!parent) continue;
