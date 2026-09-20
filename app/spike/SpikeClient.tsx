@@ -85,7 +85,7 @@ export default function SpikeClient() {
         debug === "normals"
           ? new THREE.MeshNormalMaterial({ flatShading: true })
           : paperMaterial(texture),
-        outlineMaterial(3),
+        outlineMaterial(6),
       );
       if (disposed) {
         renderer.dispose();

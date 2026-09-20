@@ -45,6 +45,15 @@ const INK_GROW = 3;
 /** Below this the sheet is bare paper, not part of the drawing. */
 const OPAQUE = 200;
 
+/**
+ * How far in from the silhouette's edge the printed lines are dropped for the 3D
+ * creature, in canonical pixels.
+ *
+ * Wide enough to swallow the drawing's own outer stroke and nothing more, so it is set
+ * from the printed line's width rather than from anything about the mesh.
+ */
+const OUTLINE_MARGIN = 12;
+
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -99,20 +108,42 @@ function layerPixels(image: HTMLImageElement, w: number, h: number): Uint8Clampe
  * radius is a pixel at the corners, and the line is what is being covered, not measured.
  */
 function inkMask(lineart: Uint8ClampedArray, w: number, h: number): Uint8Array {
-  let ink = new Uint8Array(w * h);
+  const ink = new Uint8Array(w * h);
   for (let i = 0; i < ink.length; i++) ink[i] = lineart[i * 4 + 3] > INK_ALPHA ? 1 : 0;
+  return grow(ink, w, h, INK_GROW, 1);
+}
 
-  for (let pass = 0; pass < INK_GROW; pass++) {
-    const grown = ink.slice();
+/**
+ * Four-neighbour passes over a binary mask: `fill` of 1 dilates it, 0 erodes it.
+ *
+ * A diamond rather than a disc, which at these radii differs by a pixel at the corners
+ * and costs nothing to write.
+ */
+function grow(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  passes: number,
+  fill: 0 | 1,
+): Uint8Array {
+  let current = mask;
+  for (let pass = 0; pass < passes; pass++) {
+    const next = current.slice();
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         const i = y * w + x;
-        if (ink[i] || ink[i - 1] || ink[i + 1] || ink[i - w] || ink[i + w]) grown[i] = 1;
+        const any =
+          current[i] === fill ||
+          current[i - 1] === fill ||
+          current[i + 1] === fill ||
+          current[i - w] === fill ||
+          current[i + w] === fill;
+        if (any) next[i] = fill;
       }
     }
-    ink = grown;
+    current = next;
   }
-  return ink;
+  return current;
 }
 
 /**
@@ -262,16 +293,22 @@ function bleed(sheet: Uint8ClampedArray, w: number, h: number, margin: number): 
 }
 
 /**
- * How far the colour is carried past the silhouette, in canonical pixels.
+ * How far the colour is carried past the silhouette, in canonical pixels. Effectively
+ * unlimited, and it costs nothing to be.
  *
- * Generous, and it has to be. The 3D creature is swept from the drawing but its surface
- * is a smooth union of the parts, so it bulges outside the drawn outline by tens of
- * pixels wherever two parts fuse or a feature is thin. A fragment that samples past the
- * colour is alpha-tested away and the outline hull shows through it as a black wedge -
- * which is what the tail and the frill did until this number was raised. None of the
- * margin is ever seen: the generated outline covers it.
+ * The 3D creature is swept from the drawing but its surface is a smooth union of the
+ * parts, so it strays outside the drawn outline - by tens of pixels where two parts
+ * fuse or a feature is thin, and by much more across a gap the drawing left bare, like
+ * the paper between two legs. A fragment that samples past the colour is alpha-tested
+ * away, and what shows through the hole is the outline hull: that is what put black
+ * wedges on the tail and the frill while this was 14 pixels.
+ *
+ * Unlimited rather than tuned, because the sweep is breadth-first from everything
+ * already opaque and so visits each pixel once whatever the limit is. A cap only
+ * decided where to stop paying attention, and left a class of fringe to rediscover.
+ * None of the margin is ever seen - the generated outline covers it.
  */
-const BLEED = 60;
+const BLEED = Number.POSITIVE_INFINITY;
 
 /**
  * The child's colouring as a texture for the 3D creature: crayon only.
@@ -338,6 +375,22 @@ export async function compositeCreature(
   linesCtx.drawImage(lineart, 0, 0, w, h);
   const ink = linesCtx.getImageData(0, 0, w, h);
 
+  // And only well inside the silhouette. The drawing's own outer stroke sits exactly ON
+  // that boundary, and the hull already draws an outline there - from the REAL
+  // silhouette of the volume, which is a few pixels further out because the union
+  // bulges where parts fuse and the grid rounds a knife edge. Two strokes a few pixels
+  // apart read as a double line down the spine and the tail. Keeping only the interior
+  // ink leaves one outline, owned by the hull, and the eye, mouth, frill and belly line
+  // are all far enough in to survive.
+  const inside = new Uint8Array(w * h);
+  {
+    const [, silCtx] = makeCanvas(w, h, true);
+    silCtx.drawImage(silhouette, 0, 0, w, h);
+    const alpha = silCtx.getImageData(0, 0, w, h).data;
+    for (let i = 0; i < inside.length; i++) inside[i] = alpha[i * 4 + 3] > 128 ? 1 : 0;
+  }
+  const core = grow(inside, w, h, OUTLINE_MARGIN, 0);
+
   const shown = new Uint8Array(w * h);
   rig.parts.forEach((part, index) => {
     const [, maskCtx] = makeCanvas(part.box.w, part.box.h, true);
@@ -351,7 +404,9 @@ export async function compositeCreature(
     }
   });
 
-  for (let i = 0; i < shown.length; i++) if (!shown[i]) ink.data[i * 4 + 3] = 0;
+  for (let i = 0; i < shown.length; i++) {
+    if (!shown[i] || !core[i]) ink.data[i * 4 + 3] = 0;
+  }
   linesCtx.putImageData(ink, 0, 0);
   ctx.drawImage(lines, 0, 0);
 
