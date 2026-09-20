@@ -38,6 +38,14 @@ const DEPTH = 190;
 const RADIUS_WINDOW = 30;
 /** Thickness multiplier. 1 is a circular cross-section; less keeps it papery. */
 const DEPTH_SCALE = 0.9;
+/**
+ * The steepest the surface may leave the drawn outline, as a rise over run.
+ *
+ * A circular cross-section leaves it vertically, which is a knife edge the grid cannot
+ * resolve and a point where the field stops being a distance. Capping the slope rounds
+ * the rim off just enough to be sampled.
+ */
+const RIM_SLOPE = 2;
 /** How softly the parts fuse where they overlap, in pixels. */
 const FUSE = 26;
 /**
@@ -269,13 +277,35 @@ function smin(a, b, k) {
  * thickness the region's width implies. The cross-section is a circle of the local
  * half-width, flattened by DEPTH_SCALE, so the animal keeps some of the page's
  * flatness instead of reading as a balloon.
+ *
+ * It has to be an honest DISTANCE, not merely something with the right sign, because
+ * `smin` blends its two arguments over a band of FUSE pixels and has no way to know
+ * they are lying. This used to return `-d` for any point outside the part's own mask,
+ * with no reference to z at all - so a part claimed to be three units away from a point
+ * a hundred and ninety units off the page, and the union fused surfaces that were
+ * nowhere near each other. That is where the notches along the belly came from, and the
+ * bulge past the drawn outline that forced an unlimited colour bleed and an outline
+ * margin wide enough to eat the ends off the interior lines.
+ *
+ * The form below is Quilez's rounded extrusion. Inside the solid it reduces to exactly
+ * what was here before; the whole of the change is outside, which is where the field
+ * was wrong.
  */
 function partField(part, x, y, z) {
   const d = sample(part.signed, x, y);
-  if (d <= 0) return -d;
   const r = Math.max(d, sample(part.radius, x, y));
-  const half = Math.sqrt(Math.max(0, d * (2 * r - d))) * DEPTH_SCALE;
-  return Math.max(-d, Math.abs(z - part.z) - half);
+  // A circular cross-section, but never leaving the rim faster than RIM_SLOPE. The
+  // circle's own gradient is infinite as d approaches zero, which leaves the field
+  // far from unit length exactly at the outline - so normals there point along the
+  // page and the outline hull spreads into a band instead of a line.
+  const half =
+    d > 0
+      ? Math.min(Math.sqrt(d * (2 * r - d)), d * RIM_SLOPE) * DEPTH_SCALE
+      : 0;
+
+  const wx = -d;
+  const wy = Math.abs(z - part.z) - half;
+  return Math.min(Math.max(wx, wy), 0) + Math.hypot(Math.max(wx, 0), Math.max(wy, 0));
 }
 
 function field(x, y, z) {
@@ -410,6 +440,62 @@ for (let k = 0; k < gz; k++) {
       }
     }
   }
+}
+
+// --- is it actually a closed surface? -----------------------------------------------
+/**
+ * Surface nets over a consistent field gives a watertight manifold: one vertex per cell
+ * that straddles the surface, one quad per crossing edge, every edge of every quad
+ * shared with exactly one neighbour. So a violation here is never cosmetic - it means
+ * the field or the stitching is wrong, and it means it in the rest pose, before any
+ * skinning or texturing can be blamed.
+ *
+ * Worth the twenty lines: the last defect of this kind put long flat blades through the
+ * hip and a tear beside them, was there in the rest pose the whole time, and took six
+ * rounds of looking at the wrong thing to find, because the texture hid it.
+ */
+{
+  const vertices = positions.length / 3;
+  const seen = new Map();
+  let degenerate = 0;
+  for (let t = 0; t < indices.length; t += 3) {
+    const tri = [indices[t], indices[t + 1], indices[t + 2]];
+    if (tri[0] === tri[1] || tri[1] === tri[2] || tri[0] === tri[2]) {
+      degenerate++;
+      continue;
+    }
+    for (let e = 0; e < 3; e++) {
+      const a = tri[e];
+      const b = tri[(e + 1) % 3];
+      const key = a < b ? a * vertices + b : b * vertices + a;
+      seen.set(key, (seen.get(key) ?? 0) + 1);
+    }
+  }
+
+  let unshared = 0;
+  let overshared = 0;
+  for (const uses of seen.values()) {
+    if (uses === 1) unshared++;
+    else if (uses > 2) overshared++;
+  }
+
+  // An edge with ONE face is a hole, and a hole is fatal: the surface has a boundary,
+  // so the drawing has somewhere it simply stops. A degenerate triangle is the same
+  // kind of wrongness. Either means the field or the stitching is broken.
+  if (degenerate || unshared) {
+    throw new Error(
+      `${slug}: the mesh has a boundary - ${degenerate} degenerate triangles, ` +
+        `${unshared} edges used by a single face`,
+    );
+  }
+
+  // An edge with MORE than two is a pinch, not a hole: two sheets of surface passed
+  // through one cell and shared its vertex. The surface is still closed. It happens
+  // wherever the animal nearly touches itself, and halving the grid step only makes
+  // the near-contact thinner, so this is reported rather than enforced.
+  console.log(
+    `  closed: ${seen.size} edges` + (overshared ? `, ${overshared} pinched` : ""),
+  );
 }
 
 // --- normals, texture coordinates and skin ------------------------------------------

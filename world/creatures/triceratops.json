@@ -1,32 +1,32 @@
 {
   "slug": "triceratops",
   "mesh": "/assets/dino/triceratops/creature.bin",
-  "vertices": 44352,
-  "triangles": 90668,
+  "vertices": 31055,
+  "triangles": 62132,
   "layout": {
     "position": {
       "offset": 0,
-      "length": 133056
+      "length": 93165
     },
     "normal": {
-      "offset": 532224,
-      "length": 133056
+      "offset": 372660,
+      "length": 93165
     },
     "uv": {
-      "offset": 1064448,
-      "length": 88704
+      "offset": 745320,
+      "length": 62110
     },
     "skinIndex": {
-      "offset": 1419264,
-      "length": 177408
+      "offset": 993760,
+      "length": 124220
     },
     "skinWeight": {
-      "offset": 1774080,
-      "length": 177408
+      "offset": 1242200,
+      "length": 124220
     },
     "index": {
-      "offset": 2483712,
-      "length": 272004
+      "offset": 1739080,
+      "length": 186396
     }
   },
   "bones": [
