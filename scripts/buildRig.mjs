@@ -55,16 +55,17 @@ const MAX_INFLUENCES = 3;
  * across neighbours turns every hand-off into a gradient, and spread grows roughly as
  * the square root of the pass count.
  *
- * The count is set by the worst joint in the drawing, not by the gentlest. The two
- * front feet TOUCH on the sheet, heel to toe, and in a diagonal gait they swing in
- * opposite directions - so the handful of triangles bridging them have to absorb the
- * full relative swing of two limbs. Measured across a stride at full swing: 18 passes
- * turns those triangles inside out, which renders as black shards flickering between
- * the feet; 48 clears it with the mesh's worst triangle merely creasing. Past about
- * 70 it gets worse again from the other side, as the blend grows wide enough to bind
- * regions that have no business moving together.
+ * This many reaches about three cells - a hip's width - which is the blend a rigger
+ * would paint by hand: roughly half and half where the thigh meets the belly, and the
+ * limb's own bone alone by the time you reach the foot.
+ *
+ * It was briefly 48, to stop the triangles between the two touching front feet from
+ * turning inside out. That worked by softening every limb on the animal, which is why
+ * the legs then bulged as they walked. Limb-to-limb leakage is blocked at the source
+ * now, and the few triangles that genuinely bridge two limbs are cut instead, so the
+ * blend is free to go back to being a hip's width.
  */
-const RELAX_PASSES = 48;
+const RELAX_PASSES = 18;
 const RELAX_RATE = 0.5;
 
 const svg = readFileSync(resolve(`assets/dino/${slug}.svg`), "utf8");
@@ -247,7 +248,7 @@ const built = await page.evaluate(
     }
     const vertexCount = positions.length / 2;
 
-    const indices = [];
+    let indices = [];
     for (let r = 0; r < rows - 1; r++) {
       for (let c = 0; c < cols - 1; c++) {
         const a = vertexOf[r * cols + c];
@@ -262,6 +263,30 @@ const built = await page.evaluate(
     // --- weights ----------------------------------------------------------------
     const boneCount = bones.length;
     let weights = new Float32Array(vertexCount * boneCount);
+    /** Which bone each vertex started out belonging to, before any relaxation. */
+    const seedOwner = new Int32Array(vertexCount);
+    /** 1 where a vertex sits on blank paper rather than on the drawing. */
+    const onPaper = new Uint8Array(vertexCount);
+    const isLimb = (index) => bones[index].id.startsWith("leg");
+
+    const gridNeighbours = (v) => {
+      const c = gridCoord[v * 2];
+      const r = gridCoord[v * 2 + 1];
+      const list = [];
+      for (const [dc, dr] of [
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ]) {
+        const nc = c + dc;
+        const nr = r + dr;
+        if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
+        const n = vertexOf[nr * cols + nc];
+        if (n >= 0) list.push(n);
+      }
+      return list;
+    };
 
     for (let v = 0; v < vertexCount; v++) {
       const x = Math.round(positions[v * 2]);
@@ -285,25 +310,76 @@ const built = await page.evaluate(
         owner = best;
       }
       weights[v * boneCount + owner] = 1;
+      seedOwner[v] = owner;
+      onPaper[v] = inside(x, y) ? 0 : 1;
+    }
+
+    /**
+     * A vertex out on the paper takes the limb it sits BESIDE, not the one whose
+     * pivot happens to be closest.
+     *
+     * Cells are kept whenever any corner is inside the drawing, so the mesh carries a
+     * ring of vertices over blank paper - including the gaps between the legs. Seeded
+     * by nearest pivot, a vertex halfway between two feet gets handed to whichever
+     * hip is nearer, which can be the leg on the far side of the gap; the boundary
+     * triangles of one leg then pull towards the other. Copying the nearest vertex
+     * that IS in the drawing keeps each one with the limb it actually borders.
+     */
+    // Spread outwards from the drawing a ring at a time, so a vertex two cells out on
+    // the paper still ends up with the limb it borders. `onPaper` itself is left
+    // alone - the seam check below needs to know which vertices carry no ink.
+    const settled = onPaper.map((paper) => (paper ? 0 : 1));
+    for (let pass = 0; pass < 4; pass++) {
+      const updated = seedOwner.slice();
+      const reached = [];
+      for (let v = 0; v < vertexCount; v++) {
+        if (settled[v]) continue;
+        let bestDistance = Infinity;
+        for (const n of gridNeighbours(v)) {
+          if (!settled[n]) continue;
+          const d =
+            (positions[n * 2] - positions[v * 2]) ** 2 +
+            (positions[n * 2 + 1] - positions[v * 2 + 1]) ** 2;
+          if (d < bestDistance) {
+            bestDistance = d;
+            updated[v] = seedOwner[n];
+          }
+        }
+        if (bestDistance < Infinity) reached.push(v);
+      }
+      seedOwner.set(updated);
+      for (const v of reached) settled[v] = 1;
+    }
+    for (let v = 0; v < vertexCount; v++) {
+      weights.fill(0, v * boneCount, (v + 1) * boneCount);
+      weights[v * boneCount + seedOwner[v]] = 1;
     }
 
     // Relax: replace each vertex's weights with a blend of its grid neighbours'.
     const neighbours = [];
     for (let v = 0; v < vertexCount; v++) {
-      const c = gridCoord[v * 2];
-      const r = gridCoord[v * 2 + 1];
       const list = [];
-      for (const [dc, dr] of [
-        [-1, 0],
-        [1, 0],
-        [0, -1],
-        [0, 1],
-      ]) {
-        const nc = c + dc;
-        const nr = r + dr;
-        if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
-        const n = vertexOf[nr * cols + nc];
-        if (n >= 0) list.push(n);
+      for (const n of gridNeighbours(v)) {
+        /**
+         * Weight never crosses from one limb to another.
+         *
+         * Relaxation walks the grid, and the grid knows nothing about anatomy: two
+         * legs that pass within a cell of each other on the page are neighbours as
+         * far as it is concerned, however far apart they are along the body. Left
+         * alone it pours weight straight across the gap, and since a near leg and a
+         * far leg swing in OPPOSITE directions, every vertex in between ends up
+         * dragged two ways at once. That is what makes a leg bulge and bend as it
+         * walks instead of swinging.
+         *
+         * Blocking these few edges - seven on the whole Triceratops - takes a leg
+         * vertex from keeping 0.54 of its own bone to keeping 0.82. A hip is
+         * untouched, because a thigh and a belly are not two limbs: weight still
+         * flows freely there, which is what keeps the hip soft.
+         */
+        if (isLimb(seedOwner[v]) && isLimb(seedOwner[n]) && seedOwner[v] !== seedOwner[n]) {
+          continue;
+        }
+        list.push(n);
       }
       neighbours.push(list);
     }
@@ -361,8 +437,123 @@ const built = await page.evaluate(
       }
     }
 
+    const dominantOf = (v) => boneIndex[v * MAX_INFLUENCES];
+
+    /**
+     * Where two limbs meet on the sheet, cut the mesh.
+     *
+     * A triangle reaching into two different limbs has to absorb their whole relative
+     * swing, and a near leg and a far leg swing in opposite directions - so it
+     * stretches, folds and eventually turns inside out, which renders as black shards
+     * flickering between the feet. No choice of weights avoids it: the two ends of the
+     * triangle simply have to be in two places at once.
+     *
+     * So it stops being one triangle spanning two limbs and becomes a triangle
+     * belonging to one. The limb drawn IN FRONT takes it, because at an overlap its
+     * pixels are the ones you can actually see; the limb behind gives up at most a
+     * cell of geometry, where it is hidden anyway. Vertices are copied rather than
+     * rebound, so the neighbouring triangles keep the blend that softens their hip.
+     *
+     * All three corners, not just the ones that disagree: a triangle with two rigid
+     * corners and one blended corner still deforms. Rigid on all three makes it a
+     * plain rotation, and a rotation cannot change a triangle's area at all.
+     *
+     * On a sheet whose limbs never touch this finds nothing to do, which is the point
+     * - see the assertion below.
+     */
+    const rigidCopies = new Map();
+    const seams = [];
+    for (let t = 0; t < indices.length; t += 3) {
+      const corners = [indices[t], indices[t + 1], indices[t + 2]];
+      const limbs = [...new Set(corners.map(dominantOf).filter(isLimb))];
+      if (limbs.length < 2) continue;
+
+      /**
+       * Two different questions, two different tests.
+       *
+       * The CUT applies to every triangle reaching into two limbs, paper corners and
+       * all: even in the empty gap between two feet, one corner following the near leg
+       * and another following the far leg will fold the triangle over, and a folded
+       * triangle mirrors whatever ink its cell does contain.
+       *
+       * The ASSERTION at the end is about the DRAWING, so it only counts corners that
+       * carry ink. The grid keeps a ring of vertices out on blank paper so boundary
+       * cells have corners; those say nothing about whether two limbs touch, and
+       * failing a sheet over them would make the rule impossible to satisfy - there is
+       * always a point in the gap where the nearer limb changes.
+       */
+      if (corners.filter((v) => !onPaper[v]).map(dominantOf).filter(isLimb).length > 1) {
+        seams.push({
+          x: Math.round(positions[corners[0] * 2]),
+          y: Math.round(positions[corners[0] * 2 + 1]),
+          limbs: limbs.map((b) => bones[b].id),
+        });
+      }
+
+      /**
+       * The ink decides who keeps the triangle.
+       *
+       * A bridging triangle in the gap between two feet is mostly blank paper, but it
+       * still catches the edge of whatever runs past it - usually the belly line. Hand
+       * it to a limb and that scrap of belly flies off across the gap with the leg,
+       * which is worse than the fold it was meant to cure. So the owner is chosen from
+       * the corners that carry ink: a limb if the ink belongs to one (the nearer limb,
+       * whose pixels are the ones you see at an overlap), and otherwise whatever the
+       * ink does belong to, which for the gaps is the body.
+       */
+      const ink = corners.filter((v) => !onPaper[v]);
+      const pool = ink.length ? ink : corners;
+      const inkLimbs = [...new Set(pool.map(dominantOf).filter(isLimb))];
+      const owner = inkLimbs.length
+        ? inkLimbs.reduce((a, b) => (bones[b].z > bones[a].z ? b : a))
+        : dominantOf(pool[0]);
+      for (let k = 0; k < 3; k++) {
+        const v = corners[k];
+        const cacheKey = `${v}:${owner}`;
+        let copy = rigidCopies.get(cacheKey);
+        if (copy === undefined) {
+          copy = positions.length / 2;
+          positions.push(positions[v * 2], positions[v * 2 + 1]);
+          for (let i = 0; i < MAX_INFLUENCES; i++) {
+            boneIndex.push(owner);
+            boneWeight.push(i === 0 ? 1 : 0);
+            offsets.push(
+              positions[copy * 2] - bones[owner].pivot.x,
+              positions[copy * 2 + 1] - bones[owner].pivot.y,
+            );
+          }
+          rigidCopies.set(cacheKey, copy);
+        }
+        indices[t + k] = copy;
+      }
+    }
+
+    /**
+     * Draw back to front, by the z the skeleton already declares.
+     *
+     * One mesh has no depth test, so what paints last wins, and that is index order.
+     * Left in the order the grid happened to produce - row by row, left to right -
+     * a far leg swinging forward paints over the near leg it should pass behind.
+     * Sorting by the dominant bone's z reproduces the drawing's own layering: tail,
+     * body, far legs, near legs, head. Stable, so within one bone the grid order and
+     * its cache behaviour survive.
+     */
+    const triangles = [];
+    for (let t = 0; t < indices.length; t += 3) {
+      let z = -Infinity;
+      for (let k = 0; k < 3; k++) z = Math.max(z, bones[dominantOf(indices[t + k])].z);
+      triangles.push({ t, z, order: triangles.length });
+    }
+    triangles.sort((a, b) => a.z - b.z || a.order - b.order);
+    const sortedIndices = [];
+    for (const { t } of triangles) {
+      sortedIndices.push(indices[t], indices[t + 1], indices[t + 2]);
+    }
+    indices = sortedIndices;
+
+    const meshVertexCount = positions.length / 2;
     const uvs = [];
-    for (let v = 0; v < vertexCount; v++) {
+    for (let v = 0; v < meshVertexCount; v++) {
       uvs.push(positions[v * 2] / CANVAS.w, positions[v * 2 + 1] / CANVAS.h);
     }
 
@@ -413,7 +604,17 @@ const built = await page.evaluate(
       silhouette: silCanvas.toDataURL("image/png"),
       lineart: lineCanvas.toDataURL("image/png"),
       shade: shadeCanvas.toDataURL("image/png"),
-      mesh: { vertexCount, positions, uvs, indices, boneIndex, boneWeight, offsets },
+      mesh: {
+        vertexCount: meshVertexCount,
+        gridVertexCount: vertexCount,
+        positions,
+        uvs,
+        indices,
+        boneIndex,
+        boneWeight,
+        offsets,
+      },
+      seams,
       silhouettePixels,
       uncovered,
       debug: dbg.toDataURL("image/png"),
@@ -493,6 +694,7 @@ writeFileSync(
       bones: bones.map((b) => ({ id: b.id, parent: b.parent, pivot: b.pivot })),
       mesh: {
         vertexCount: built.mesh.vertexCount,
+        gridVertexCount: built.mesh.gridVertexCount,
         influences: MAX_INFLUENCES,
         positions: round(built.mesh.positions, 2),
         uvs: round(built.mesh.uvs, 5),
@@ -514,6 +716,38 @@ console.log(
     `at ${Math.round(built.placement.x)},${Math.round(built.placement.y)}`,
 );
 console.log(`  triangles ${built.mesh.indices.length / 3}, uncovered ${missed.toFixed(2)}%`);
+
+/**
+ * No triangle may reach into two different limbs.
+ *
+ * This is the sheet's contract with the rig, and it is a property of the DRAWING, not
+ * of anything the solver can fix afterwards. Two limbs that touch on the paper share
+ * mesh, and they swing in opposite directions, so the triangles between them are asked
+ * to be in two places at once: they stretch, fold, invert, and render as black shards
+ * between the feet. Weights can soften it, but softening every limb on the animal to
+ * do so is what made the legs bulge as they walked.
+ *
+ * So the drawing has to keep its limbs apart - about 40 canonical pixels, a little
+ * over a grid step, which is the furthest one triangle can reach. Checked here rather
+ * than trusted, because the failure is invisible in the artwork and only shows up as
+ * a flicker once something is walking.
+ *
+ * The cut above still runs, and still resolves anything that does slip through, but
+ * this failing means a sheet needs redrawing rather than a rig needs tuning.
+ */
+if (built.seams.length) {
+  const where = built.seams
+    .slice(0, 6)
+    .map((s) => `${s.limbs.join(" + ")} at ${s.x},${s.y}`)
+    .join("\n    ");
+  console.error(
+    `\n  ${slug}: ${built.seams.length} triangles reach into two limbs at once.\n` +
+      `  The drawing has limbs touching, which no amount of rigging survives.\n` +
+      `  Separate them on the sheet by ~40 canonical px and rebuild.\n    ${where}` +
+      (built.seams.length > 6 ? `\n    ...and ${built.seams.length - 6} more` : ""),
+  );
+  process.exit(1);
+}
 if (missed > 0.5) {
   console.error(`  WARNING: ${missed.toFixed(2)}% of the drawing is outside the mesh.`);
 }

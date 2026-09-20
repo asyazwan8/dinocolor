@@ -34,17 +34,17 @@
       points="316,300 392,236 520,182 660,176 760,206 812,268 836,352 840,446
               816,530 700,566 520,574 400,552 340,486 312,404"/>
 
-    <polygon id="part-legRearFar" data-parent="body" data-pivot="416,486" data-z="4"
-      points="378,466 458,466 464,600 456,668 380,668 372,600"/>
+    <polygon id="part-legRearFar" data-parent="body" data-pivot="413,490" data-z="4"
+      points="362,502 465,502 436,582 446,663 344,663 353,582"/>
 
-    <polygon id="part-legFrontFar" data-parent="body" data-pivot="706,482" data-z="5"
-      points="642,462 770,462 776,600 764,674 648,674 636,600"/>
+    <polygon id="part-legFrontFar" data-parent="body" data-pivot="721,531" data-z="5"
+      points="670,544 773,544 754,607 763,670 660,670 670,607"/>
 
-    <polygon id="part-legRearNear" data-parent="body" data-pivot="550,492" data-z="6"
-      points="480,472 620,472 626,600 614,682 490,682 474,600"/>
+    <polygon id="part-legRearNear" data-parent="body" data-pivot="567,531" data-z="6"
+      points="515,544 619,544 597,617 607,689 504,689 513,617"/>
 
-    <polygon id="part-legFrontNear" data-parent="body" data-pivot="837,478" data-z="7"
-      points="788,470 890,470 896,600 886,674 790,674 778,600"/>
+    <polygon id="part-legFrontNear" data-parent="body" data-pivot="875,480" data-z="7"
+      points="823,492 927,492 928,589 938,686 834,686 844,589"/>
 
     <polygon id="part-head" data-parent="body" data-pivot="718,420" data-z="8"
       points="684,300 700,190 770,124 880,120 946,170 1040,164 1160,200 1156,300

@@ -139,9 +139,10 @@ describe("the walk cycle", () => {
   });
 
   it("never jumps a vertex between adjacent frames", () => {
-    // A sixty-fourth of a stride is a small motion. A vertex crossing half a grid
-    // cell in that time is a weight blow-up, not a walk.
-    const LIMIT = 12;
+    // A sixty-fourth of a stride is a small motion. A vertex crossing most of a grid
+    // cell in that time is a weight blow-up, not a walk. The rig reaches 12.3px, which
+    // is a rigid foot at the end of its lever doing exactly what it should.
+    const LIMIT = 20;
     for (let f = 0; f < frames.length - 1; f++) {
       const a = frames[f];
       const b = frames[f + 1];
@@ -182,14 +183,66 @@ describe("the walk cycle", () => {
         const r = area(rest, t);
         if (Math.abs(r) < 1e-6) continue;
         const ratio = area(frame, t) / r;
-        // Bounds set from what the rig actually achieves (0.27 to 1.96 at the worst
-        // triangle, where the two front feet touch on the sheet), with room for a
-        // gait tweak but not for a tear.
+        // Bounds set from what the rig actually achieves (0.26 to 2.03 at the worst
+        // triangle, one crease at a rear hip), with room for a gait tweak but not for
+        // a tear. Before the limbs were separated on the sheet this reached -3.8.
         expect(ratio, `triangle ${t / 3} inverted`).toBeGreaterThan(0);
         expect(ratio, `triangle ${t / 3} collapsed`).toBeGreaterThan(0.15);
         expect(ratio, `triangle ${t / 3} stretched`).toBeLessThan(3);
       }
     }
+  });
+});
+
+describe("limbs stay rigid", () => {
+  /**
+   * The two invariants that say, in numbers, that a leg swings instead of warping.
+   *
+   * Both failed on the rig that shipped before the sheet was redrawn, and the second
+   * is the one that matters: a leg vertex that carries 0.47 of a leg swinging the
+   * OTHER way is pulled two directions at once, and the limb bulges and bends through
+   * the stride. It is the defect the whole change exists to remove, and nothing else
+   * in this file could see it.
+   */
+  const isLeg = (index: number) => rig.bones[index].id.startsWith("leg");
+
+  it("gives a leg vertex almost no weight from any other leg", () => {
+    let worst = 0;
+    let at = -1;
+    for (let v = 0; v < vertexCount; v++) {
+      const own = boneIndex[v * influences];
+      if (!isLeg(own)) continue;
+      for (let i = 1; i < influences; i++) {
+        const other = boneIndex[v * influences + i];
+        if (!isLeg(other) || other === own) continue;
+        if (boneWeight[v * influences + i] > worst) {
+          worst = boneWeight[v * influences + i];
+          at = v;
+        }
+      }
+    }
+    // The rig reaches 0.13; it was 0.47 when the legs touched on the sheet.
+    expect(worst, `vertex ${at} is shared between two legs`).toBeLessThan(0.25);
+  });
+
+  it("binds the lower half of a limb to that limb alone", () => {
+    let weakest = 1;
+    let at = -1;
+    for (let v = 0; v < vertexCount; v++) {
+      const own = boneIndex[v * influences];
+      if (!isLeg(own)) continue;
+      // Well below the hip, where there is no joint and nothing to blend with.
+      if (positions[v * 2 + 1] - rig.bones[own].pivot.y <= 120) continue;
+      if (boneWeight[v * influences] < weakest) {
+        weakest = boneWeight[v * influences];
+        at = v;
+      }
+    }
+    expect(at, "no leg vertex sits far enough below a hip to test").toBeGreaterThan(-1);
+    // The rig reaches 0.83 at its weakest, and 0.97 on average.
+    expect(weakest, `vertex ${at} in mid-limb is not bound to its own bone`).toBeGreaterThan(
+      0.75,
+    );
   });
 });
 

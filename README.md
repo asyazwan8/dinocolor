@@ -86,11 +86,32 @@ has nothing to come apart along.
 
 Weights start as a hard partition from the polygons and are then relaxed by averaging
 each vertex against its grid neighbours, which turns every hand-off into a gradient
-without a single hand-tuned falloff. The pass count is set by the worst joint on the
-sheet, not the gentlest: the two front feet touch, heel to toe, and swing in opposite
-directions, so the triangles bridging them have to absorb the full relative swing of
-two limbs. Too narrow a blend turns those triangles inside out, which renders as black
-shards flickering between the feet.
+without a single hand-tuned falloff — with one rule: **weight never crosses from one
+limb to another.** Relaxation walks the grid, and the grid knows nothing about anatomy;
+two legs passing within a cell of each other on the page are neighbours as far as it is
+concerned, however far apart they are along the body. Left alone it pours weight across
+the gap, and since a near leg and a far leg swing in opposite directions, every vertex
+between them is dragged two ways at once and the limb bulges as it walks. Blocking those
+few edges takes a leg vertex from keeping 0.54 of its own bone to keeping 0.87.
+
+### The sheet is drawn for the rig
+
+**No two limbs may touch on the printed sheet**, and `buildRig` fails the build if any
+triangle reaches into two of them.
+
+This is the one constraint the solver cannot rescue. Limbs that touch share mesh, and
+they swing in opposite directions, so the triangles between them are asked to be in two
+places at once: they stretch, fold over, and render as black shards flickering between
+the feet. Widening the weight blend hides it, at the cost of softening every limb on the
+animal — which is what made the legs warp. The way out is that the drawing keeps its
+limbs about 40 canonical pixels apart, a little more than one triangle can reach.
+
+It is how teamLab's sheets work, and how Live2D and Spine rigs are drawn: the template is
+authored *for* the rig rather than retrofitted to it. `scripts/redrawLegs.mjs` is that
+authoring step for the Triceratops — it keeps the body, head, frill and tail exactly as
+drawn, replaces the four legs with a separated stance, and prints the ownership polygons
+and pivots for the skeleton, since it is the only thing that knows where the new limbs
+are.
 
 `RIG_DEBUG=out.png node scripts/buildRig.mjs triceratops` renders the weight field,
 each vertex coloured by its dominant bone and faded by how dominant it is — a
