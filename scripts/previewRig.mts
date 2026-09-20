@@ -1,22 +1,23 @@
 /**
  * Render the rig POSED, across a full stride, with a deliberately messy fake
- * "colouring" so the deformation can be eyeballed.
+ * "colouring" so the parts can be eyeballed.
  *
  *   npx vite-node scripts/previewRig.mts -- triceratops out.png
  *
- * The rest pose is the one pose that is always fine - every vertex sits exactly where
- * it was drawn - which is precisely why a rest-only preview let a rig that tears at
- * the hips pass every check. So this walks the animal.
+ * The rest pose is the one pose that is always fine - every part sits exactly where it
+ * was drawn - which is precisely why a rest-only preview let a rig that tears at the
+ * hips pass every check. So this walks the animal.
  *
- * Each triangle is drawn as an affine warp from its rest position to its posed one,
- * which is what the GPU does with the same buffers. A tear, a fold or a runaway weight
- * therefore looks here exactly as it will on the screen.
+ * Each part is drawn as a rigid rotation about its own pivot, in the rig's own order,
+ * back to front. That is exactly what the runtime does, so what shows up here is what
+ * shows up on the screen: if a cut is visible at any point in the stride, it is
+ * visible in this strip.
  */
 import { chromium } from "playwright";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { poseGait } from "../world/gait";
-import { Skeleton, skinMesh } from "../world/skin";
+import { Skeleton } from "../world/skeleton";
 import type { Rig } from "../world/types";
 
 const args = process.argv.slice(2).filter((a) => a !== "--");
@@ -27,24 +28,25 @@ const FRAMES = 6;
 
 const rig: Rig = JSON.parse(readFileSync(resolve(`world/rigs/${slug}.json`), "utf8"));
 
-const skeleton = new Skeleton(rig.bones);
-const root = rig.bones[skeleton.rootIndex].pivot;
-const ids = rig.bones.map((b) => b.id);
-const rotation = new Float32Array(rig.bones.length);
-const posed = new Float32Array(rig.mesh.vertexCount * 2);
+const skeleton = new Skeleton(rig.parts);
+const root = rig.parts[skeleton.rootIndex].pivot;
+const ids = rig.parts.map((p) => p.id);
+const rotation = new Float32Array(rig.parts.length);
 
-const frames: number[][] = [];
+/** For each frame, every part's placement: where its pivot goes, and by how much it turns. */
+const frames: { x: number; y: number; rot: number }[][] = [];
 for (let f = 0; f < FRAMES; f++) {
   const clock = { phase: (f / FRAMES) * Math.PI * 2, breath: 0 };
   const bob = poseGait(ids, skeleton.rootIndex, clock, 1, rotation);
-  skinMesh(rig.mesh, skeleton.solve(rotation, 0, bob), posed);
-  // Back into canvas space: the skinner works relative to the root pivot.
-  const abs = new Array(posed.length);
-  for (let i = 0; i < posed.length; i += 2) {
-    abs[i] = posed[i] + root.x;
-    abs[i + 1] = posed[i + 1] + root.y;
-  }
-  frames.push(abs);
+  const solved = skeleton.solve(rotation, 0, bob);
+  frames.push(
+    rig.parts.map((_, i) => ({
+      // Back into canvas space: the skeleton works relative to the root pivot.
+      x: solved.x[i] + root.x,
+      y: solved.y[i] + root.y,
+      rot: solved.rot[i],
+    })),
+  );
 }
 
 // Chromium refuses file:// subresources on a setContent page, so inline the PNGs.
@@ -55,9 +57,7 @@ const browser = await chromium.launch({
   executablePath:
     process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
 });
-const page = await browser.newPage({
-  viewport: { width: rig.texture.w, height: rig.texture.h * FRAMES },
-});
+const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
 
 const png = await page.evaluate(
   async ({ rig, frames, layers, FRAMES }) => {
@@ -77,15 +77,16 @@ const png = await page.evaluate(
     };
 
     const { w, h } = rig.texture;
-    const [silhouette, shade, lineart] = await Promise.all([
+    const [silhouette, shade, lineart, ...masks] = await Promise.all([
       load(layers.silhouette),
       load(layers.shade),
       load(layers.lineart),
+      ...layers.masks.map(load),
     ]);
 
     /**
-     * Stand-in for a child's rectified sheet. Bands rather than a flat fill: a
-     * deformation that folds, shears or tears shows up in how the bands run long
+     * Stand-in for a child's rectified sheet. Bands rather than a flat fill: a part
+     * that slips relative to its neighbour shows up in how the bands line up long
      * before it is visible in the outline.
      */
     const [texture, tex] = make(w, h);
@@ -104,56 +105,37 @@ const png = await page.evaluate(
     tex.globalCompositeOperation = "source-over";
     tex.drawImage(lineart, 0, 0, w, h);
 
+    // Cut one piece per part, from the one sheet, at its rest position.
+    const cutouts = rig.parts.map((part, i) => {
+      const { box } = part;
+      const [piece, cut] = make(box.w, box.h);
+      cut.drawImage(texture, -box.x, -box.y);
+      cut.globalCompositeOperation = "destination-in";
+      cut.drawImage(masks[i], 0, 0);
+      return piece;
+    });
+
     const [sheet, ctx] = make(w, h * FRAMES);
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, w, h * FRAMES);
 
-    const rest = rig.mesh.positions;
-    const indices = rig.mesh.indices;
-
-    frames.forEach((abs, f) => {
+    frames.forEach((placements, f) => {
       ctx.save();
       ctx.translate(0, f * h);
 
-      for (let t = 0; t < indices.length; t += 3) {
-        const i0 = indices[t] * 2;
-        const i1 = indices[t + 1] * 2;
-        const i2 = indices[t + 2] * 2;
-
-        const ux = [rest[i0], rest[i1], rest[i2]];
-        const uy = [rest[i0 + 1], rest[i1 + 1], rest[i2 + 1]];
-        let px = [abs[i0], abs[i1], abs[i2]];
-        let py = [abs[i0 + 1], abs[i1 + 1], abs[i2 + 1]];
-
-        // Grow each triangle by a hair about its centroid. Clipping is antialiased, so
-        // abutting triangles otherwise leave a hairline of background between them -
-        // an artefact of this renderer, not of the mesh, and one that would look
-        // exactly like the tearing this preview exists to catch.
-        const cx = (px[0] + px[1] + px[2]) / 3;
-        const cy = (py[0] + py[1] + py[2]) / 3;
-        px = px.map((v) => cx + (v - cx) * 1.02);
-        py = py.map((v) => cy + (v - cy) * 1.02);
-
-        const det =
-          (ux[1] - ux[0]) * (uy[2] - uy[0]) - (ux[2] - ux[0]) * (uy[1] - uy[0]);
-        if (!det) continue;
-
-        const a = ((px[1] - px[0]) * (uy[2] - uy[0]) - (px[2] - px[0]) * (uy[1] - uy[0])) / det;
-        const b = ((py[1] - py[0]) * (uy[2] - uy[0]) - (py[2] - py[0]) * (uy[1] - uy[0])) / det;
-        const c = ((px[2] - px[0]) * (ux[1] - ux[0]) - (px[1] - px[0]) * (ux[2] - ux[0])) / det;
-        const d = ((py[2] - py[0]) * (ux[1] - ux[0]) - (py[1] - py[0]) * (ux[2] - ux[0])) / det;
-
+      // Back to front, exactly as the runtime stacks them.
+      rig.parts.forEach((part, index) => {
+        const at = placements[index];
         ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(px[0], py[0]);
-        ctx.lineTo(px[1], py[1]);
-        ctx.lineTo(px[2], py[2]);
-        ctx.closePath();
-        ctx.clip();
-        ctx.transform(a, b, c, d, px[0] - a * ux[0] - c * uy[0], py[0] - b * ux[0] - d * uy[0]);
-        ctx.drawImage(texture, 0, 0);
+        ctx.translate(at.x, at.y);
+        ctx.rotate(at.rot);
+        ctx.translate(-part.pivot.x, -part.pivot.y);
+
+        // Each part is its own cut-out, drawn at the box it was cut from - exactly
+        // what the runtime does with a sprite per part.
+        ctx.drawImage(cutouts[index], part.box.x, part.box.y);
         ctx.restore();
-      }
+      });
 
       ctx.restore();
       ctx.fillStyle = "#0003";
@@ -163,12 +145,16 @@ const png = await page.evaluate(
     return sheet.toDataURL("image/png");
   },
   {
-    rig: { texture: rig.texture, mesh: { positions: rig.mesh.positions, indices: rig.mesh.indices } },
+    rig: {
+      texture: rig.texture,
+      parts: rig.parts.map((p) => ({ pivot: p.pivot, box: p.box })),
+    },
     frames,
     layers: {
       silhouette: inline(rig.layers.silhouette),
       shade: inline(rig.layers.shade),
       lineart: inline(rig.layers.lineart),
+      masks: rig.parts.map((p) => inline(p.mask)),
     },
     FRAMES,
   },
@@ -176,6 +162,5 @@ const png = await page.evaluate(
 
 await browser.close();
 
-const { writeFileSync } = await import("node:fs");
 writeFileSync(resolve(out), Buffer.from(png.split(",")[1], "base64"));
 console.log(`${slug}: ${FRAMES} posed frames -> ${out}`);

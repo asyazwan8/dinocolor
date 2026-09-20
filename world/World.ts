@@ -206,8 +206,8 @@ export class World {
     /** Fraction across the stage to start at. Omit to walk in from the edge. */
     startAt?: number,
   ): Promise<void> {
-    const skin = await compositeRig(this.rig, colouring);
-    const rig = new DinoRig(this.rig, skin);
+    const cutouts = await compositeRig(this.rig, colouring);
+    const rig = new DinoRig(this.rig, cutouts);
 
     // Spread arrivals across lanes so the screen fills in depth, not in a row.
     const lane = this.pickLane();

@@ -1,14 +1,29 @@
 /**
- * Turn printed artwork plus a skeleton into a skinned mesh.
+ * Turn printed artwork plus a skeleton into a set of rigid parts.
  *
- *   assets/dino/<slug>.svg          bone polygons + a reference to the artwork
+ *   assets/dino/<slug>.svg          seed points, pivots, draw order, the belly cut
  *   public/assets/dino/<slug>.png   the printed drawing
- *     -> world/rigs/<slug>.json          bones, mesh, weights
+ *     -> world/rigs/<slug>.json          one cut-out per part
+ *     -> public/assets/dino/<slug>/parts/ one alpha mask per part
  *     -> public/assets/dino/<slug>/      silhouette, lineart and shade, whole
  *
- * The drawing is never cut up. A grid of vertices covers it, each vertex is bound to
- * a few bones, and bending the bones bends the whole drawing at once. That is what
- * makes seams impossible: there are no parts to come apart.
+ * The drawing is cut into pieces that each move RIGIDLY, and every cut is put where
+ * the body itself covers it. That is the whole idea, and it is the fifth attempt at
+ * this: bending the drawing with blend skinning cannot be seamless, because a joint
+ * must have a weight gradient somewhere and the two bones differ most exactly there,
+ * so whatever ink crosses it is sheared. Rigid parts have no gradient to shear.
+ *
+ * Two rules make the cuts invisible, and they are the difference between this and the
+ * cutout rig that looked chopped up:
+ *
+ *   1. Every part boundary that can be SEEN lies on a line the artist drew. The parts
+ *      are not outlined here - each one floods out from a seed through the drawing's
+ *      interior until the printed ink stops it.
+ *   2. Every moving part is drawn BEHIND the body, so the cut across its top is
+ *      painted over at any angle. Each limb then carries on past that cut, into the
+ *      torso, so no swing can open a gap at the hip - but only inside a disc about its
+ *      own joint, which is what keeps that hidden material from swinging out into
+ *      open paper somewhere along the belly.
  *
  * The silhouette is derived from the artwork rather than traced. Flooding inward from
  * the border marks everything the flood can reach as paper; what it cannot reach is
@@ -28,10 +43,20 @@ if (!slug) {
 }
 
 const CANVAS = { w: 1200, h: 800 };
-/** Anything at least this bright counts as paper for the flood. */
+/** Anything at least this bright counts as paper for the silhouette flood. */
 const PAPER_LEVEL = 232;
 /** Above this luminance the drawing is paper, and drops out of the ink layer. */
 const INK_FLOOR = 238;
+
+/**
+ * Darker than this is a drawn line, and a drawn line is a wall.
+ *
+ * Deliberately not the same as INK_FLOOR. That one decides what is dark enough to
+ * SHOW; this one decides what is dark enough to STOP a flood, and it wants to be well
+ * clear of the antialiasing along an edge so that a part cannot leak through a line
+ * into its neighbour.
+ */
+const INK_WALL = 170;
 
 /**
  * Form shading. Restrained on purpose: the drawing's own outline carries the shape,
@@ -44,29 +69,27 @@ const SHADE_BLUR = 22;
 const SHADE_OFFSET = { x: 14, y: 18 };
 
 /**
- * Mesh density. Fine enough to bend smoothly at a hip, coarse enough that ten
- * dinosaurs of these can be skinned every frame.
+ * How far below the traced belly the cut actually runs.
+ *
+ * The trace follows the drawn line; the cut has to fall just under it so the ink ends
+ * up on the BODY's side. A belly line that swung with a leg is exactly the artefact
+ * this rig exists to remove.
  */
-const GRID_STEP = 24;
-/** Bones allowed to influence one vertex. Three is plenty for limbs off one torso. */
-const MAX_INFLUENCES = 3;
+const CUT_BELOW = 9;
+/** How thick the cut is painted. Thick enough that no flood squeezes through it. */
+const CUT_WIDTH = 7;
+
 /**
- * Weight relaxation. Ownership from the polygons is a hard partition; averaging it
- * across neighbours turns every hand-off into a gradient, and spread grows roughly as
- * the square root of the pass count.
- *
- * This many reaches about three cells - a hip's width - which is the blend a rigger
- * would paint by hand: roughly half and half where the thigh meets the belly, and the
- * limb's own bone alone by the time you reach the foot.
- *
- * It was briefly 48, to stop the triangles between the two touching front feet from
- * turning inside out. That worked by softening every limb on the animal, which is why
- * the legs then bulged as they walked. Limb-to-limb leakage is blocked at the source
- * now, and the few triangles that genuinely bridge two limbs are cut instead, so the
- * blend is free to go back to being a hip's width.
+ * The disc a limb's bury is confined to, as a multiple of how far the limb reaches to
+ * either side of its own joint. A little over 1 is what keeps the hip closed at the
+ * ends of the swing without the buried part starting to overhang the limb.
  */
-const RELAX_PASSES = 18;
-const RELAX_RATE = 0.5;
+const HIP_MARGIN = 1.6;
+/**
+ * How far a part that does not swing reaches under whatever covers it. Only has to
+ * survive the few degrees a head turns, not a full stride.
+ */
+const OVERLAP = 26;
 
 const svg = readFileSync(resolve(`assets/dino/${slug}.svg`), "utf8");
 const artworkSrc = /data-artwork="([^"]+)"/.exec(svg)?.[1];
@@ -80,8 +103,8 @@ const browser = await chromium.launch({ executablePath: CHROMIUM });
 const page = await browser.newPage({ viewport: { width: CANVAS.w, height: CANVAS.h } });
 await page.setContent(`<style>html,body{margin:0}</style>${svg}`, { waitUntil: "load" });
 
-const bones = await page.evaluate(() =>
-  [...document.querySelectorAll("#parts > polygon")]
+const parts = await page.evaluate(() =>
+  [...document.querySelectorAll("#parts > circle")]
     .map((el) => {
       const [px, py] = el.dataset.pivot.split(",").map(Number);
       return {
@@ -89,17 +112,28 @@ const bones = await page.evaluate(() =>
         parent: el.dataset.parent || null,
         pivot: { x: px, y: py },
         z: Number(el.dataset.z),
-        points: el.getAttribute("points"),
+        seed: { x: Number(el.getAttribute("cx")), y: Number(el.getAttribute("cy")) },
       };
     })
     .sort((a, b) => a.z - b.z),
 );
 
+const cut = await page.evaluate(() => {
+  const el = document.querySelector("#cut-belly");
+  if (!el) return [];
+  return el
+    .getAttribute("points")
+    .trim()
+    .split(/\s+/)
+    .map((pair) => pair.split(",").map(Number));
+});
+
 const built = await page.evaluate(
   async (input) => {
-    const { bones, artworkDataUrl, CANVAS, PAPER_LEVEL, INK_FLOOR } = input;
+    const { parts, cut, artworkDataUrl, CANVAS } = input;
+    const { PAPER_LEVEL, INK_FLOOR, INK_WALL } = input;
     const { SHADE_STRENGTH, SHADE_BLUR, SHADE_OFFSET } = input;
-    const { GRID_STEP, MAX_INFLUENCES, RELAX_PASSES, RELAX_RATE } = input;
+    const { CUT_BELOW, CUT_WIDTH, OVERLAP, HIP_MARGIN } = input;
 
     const make = (w, h) => {
       const c = document.createElement("canvas");
@@ -125,19 +159,16 @@ const built = await page.evaluate(
     artCtx.fillRect(0, 0, CANVAS.w, CANVAS.h);
     artCtx.drawImage(art, placement.x, placement.y, placement.w, placement.h);
     const pixels = artCtx.getImageData(0, 0, CANVAS.w, CANVAS.h).data;
+    const lumAt = (i) => (pixels[i * 4] + pixels[i * 4 + 1] + pixels[i * 4 + 2]) / 3;
 
     // --- silhouette -------------------------------------------------------------
     const outside = new Uint8Array(CANVAS.w * CANVAS.h);
     const stack = [];
-    const isPaper = (i) => {
-      const o = i * 4;
-      return (pixels[o] + pixels[o + 1] + pixels[o + 2]) / 3 >= PAPER_LEVEL;
-    };
     for (let x = 0; x < CANVAS.w; x++) stack.push(x, (CANVAS.h - 1) * CANVAS.w + x);
     for (let y = 0; y < CANVAS.h; y++) stack.push(y * CANVAS.w, y * CANVAS.w + CANVAS.w - 1);
     while (stack.length) {
       const i = stack.pop();
-      if (outside[i] || !isPaper(i)) continue;
+      if (outside[i] || lumAt(i) < PAPER_LEVEL) continue;
       outside[i] = 1;
       const x = i % CANVAS.w;
       if (x > 0) stack.push(i - 1);
@@ -148,23 +179,8 @@ const built = await page.evaluate(
 
     const [silCanvas, silCtx] = make(CANVAS.w, CANVAS.h);
     const sil = silCtx.createImageData(CANVAS.w, CANVAS.h);
-    let minX = CANVAS.w;
-    let minY = CANVAS.h;
-    let maxX = -1;
-    let maxY = -1;
-    for (let i = 0; i < outside.length; i++) {
-      if (outside[i]) continue;
-      sil.data[i * 4 + 3] = 255;
-      const x = i % CANVAS.w;
-      const y = (i / CANVAS.w) | 0;
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-    }
+    for (let i = 0; i < outside.length; i++) if (!outside[i]) sil.data[i * 4 + 3] = 255;
     silCtx.putImageData(sil, 0, 0);
-    const inside = (x, y) =>
-      x >= 0 && y >= 0 && x < CANVAS.w && y < CANVAS.h && !outside[y * CANVAS.w + x];
 
     // --- ink and shade ----------------------------------------------------------
     const [lineCanvas, lineCtx] = make(CANVAS.w, CANVAS.h);
@@ -190,452 +206,268 @@ const built = await page.evaluate(
     shadeCtx.globalCompositeOperation = "destination-in";
     shadeCtx.drawImage(silCanvas, 0, 0);
 
-    // --- bone ownership map -----------------------------------------------------
-    // Each polygon painted in ascending z, encoding its bone index in the red
-    // channel. Reading a pixel then gives the owner directly, with the highest z
-    // naturally winning any overlap because it was painted last.
-    const [ownCanvas, ownCtx] = make(CANVAS.w, CANVAS.h);
-    bones.forEach((bone, index) => {
-      ownCtx.fillStyle = `rgb(${index + 1},0,0)`;
-      ownCtx.beginPath();
-      bone.points
-        .trim()
-        .split(/\s+/)
-        .forEach((pair, i) => {
-          const [px, py] = pair.split(",").map(Number);
-          if (i === 0) ownCtx.moveTo(px, py);
-          else ownCtx.lineTo(px, py);
-        });
-      ownCtx.closePath();
-      ownCtx.fill();
+    // --- walls ------------------------------------------------------------------
+    /**
+     * What a flood may not cross: the printed lines, the paper outside the drawing,
+     * and the one cut the drawing does not provide.
+     */
+    const [wallCanvas, wallCtx] = make(CANVAS.w, CANVAS.h);
+    wallCtx.strokeStyle = "#000";
+    wallCtx.lineWidth = CUT_WIDTH;
+    wallCtx.lineCap = "round";
+    wallCtx.lineJoin = "round";
+    wallCtx.beginPath();
+    cut.forEach(([x, y], i) => {
+      if (i === 0) wallCtx.moveTo(x, y + CUT_BELOW);
+      else wallCtx.lineTo(x, y + CUT_BELOW);
     });
-    const owners = ownCtx.getImageData(0, 0, CANVAS.w, CANVAS.h).data;
+    wallCtx.stroke();
+    const cutPixels = wallCtx.getImageData(0, 0, CANVAS.w, CANVAS.h).data;
 
-    // --- grid -------------------------------------------------------------------
-    const originX = Math.max(0, minX - GRID_STEP);
-    const originY = Math.max(0, minY - GRID_STEP);
-    const cols = Math.ceil((Math.min(CANVAS.w, maxX + GRID_STEP) - originX) / GRID_STEP) + 1;
-    const rows = Math.ceil((Math.min(CANVAS.h, maxY + GRID_STEP) - originY) / GRID_STEP) + 1;
-
-    const gridX = (c) => originX + c * GRID_STEP;
-    const gridY = (r) => originY + r * GRID_STEP;
-
-    // Keep a cell if any corner is inside, so the boundary is always covered.
-    const keep = new Uint8Array(cols * rows);
-    for (let r = 0; r < rows - 1; r++) {
-      for (let c = 0; c < cols - 1; c++) {
-        const corners = [
-          [c, r],
-          [c + 1, r],
-          [c, r + 1],
-          [c + 1, r + 1],
-        ];
-        if (!corners.some(([cc, rr]) => inside(gridX(cc), gridY(rr)))) continue;
-        for (const [cc, rr] of corners) keep[rr * cols + cc] = 1;
-      }
+    const wall = new Uint8Array(CANVAS.w * CANVAS.h);
+    for (let i = 0; i < wall.length; i++) {
+      wall[i] = outside[i] || lumAt(i) < INK_WALL || cutPixels[i * 4 + 3] > 40 ? 1 : 0;
     }
 
-    const vertexOf = new Int32Array(cols * rows).fill(-1);
-    const positions = [];
-    const gridCoord = [];
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        if (!keep[r * cols + c]) continue;
-        vertexOf[r * cols + c] = positions.length / 2;
-        positions.push(gridX(c), gridY(r));
-        gridCoord.push(c, r);
+    // --- one region per part ----------------------------------------------------
+    /**
+     * Flood outward from each seed through the drawing's interior. The printed lines
+     * stop it, so the region a part ends up with is bounded by the artist's own
+     * strokes - a leg by its own outline, the head by the frill's. Nothing here has
+     * to guess where a part ends.
+     */
+    const owner = new Int16Array(CANVAS.w * CANVAS.h).fill(-1);
+    parts.forEach((part, index) => {
+      const start = Math.round(part.seed.y) * CANVAS.w + Math.round(part.seed.x);
+      if (wall[start]) {
+        throw new Error(`seed for "${part.id}" landed on a line or outside the drawing`);
       }
+      const queue = [start];
+      owner[start] = index;
+      while (queue.length) {
+        const i = queue.pop();
+        const x = i % CANVAS.w;
+        for (const n of [
+          x > 0 ? i - 1 : -1,
+          x < CANVAS.w - 1 ? i + 1 : -1,
+          i - CANVAS.w,
+          i + CANVAS.w,
+        ]) {
+          if (n < 0 || n >= owner.length) continue;
+          if (owner[n] !== -1 || wall[n]) continue;
+          owner[n] = index;
+          queue.push(n);
+        }
+      }
+    });
+
+    /**
+     * Then hand out the lines themselves, growing every region at the same rate so
+     * each stroke goes to whichever part it borders - and when two parts share one
+     * stroke, to the one drawn in front, since its pixels are the ones you see.
+     */
+    let frontier = [];
+    for (let i = 0; i < owner.length; i++) if (owner[i] !== -1) frontier.push(i);
+    while (frontier.length) {
+      const next = [];
+      for (const i of frontier) {
+        const x = i % CANVAS.w;
+        for (const n of [
+          x > 0 ? i - 1 : -1,
+          x < CANVAS.w - 1 ? i + 1 : -1,
+          i - CANVAS.w,
+          i + CANVAS.w,
+        ]) {
+          if (n < 0 || n >= owner.length || outside[n]) continue;
+          if (owner[n] === -1) {
+            owner[n] = owner[i];
+            next.push(n);
+          } else if (owner[n] !== owner[i] && parts[owner[i]].z > parts[owner[n]].z) {
+            // a shared stroke: the nearer part keeps it
+            owner[n] = owner[i];
+          }
+        }
+      }
+      frontier = next;
     }
-    const vertexCount = positions.length / 2;
 
-    let indices = [];
-    for (let r = 0; r < rows - 1; r++) {
-      for (let c = 0; c < cols - 1; c++) {
-        const a = vertexOf[r * cols + c];
-        const b = vertexOf[r * cols + c + 1];
-        const d = vertexOf[(r + 1) * cols + c];
-        const e = vertexOf[(r + 1) * cols + c + 1];
-        if (a < 0 || b < 0 || d < 0 || e < 0) continue;
-        indices.push(a, b, d, b, e, d);
+    // --- bury each part under the ones drawn in front of it ---------------------
+    /**
+     * A part's region stops where it stops being visible, which is not where it needs
+     * to stop existing. Grow each one under whatever is drawn over it, so there is
+     * always something behind the covering part however far either of them turns, and
+     * no sliver of paper can show through the join.
+     *
+     * For a limb the growth is confined to a DISC ABOUT ITS PIVOT, and that is the
+     * whole trick. A limb rotates, so its buried part rotates too, and a plain
+     * dilation spreads sideways along the belly - which slopes up towards the tail and
+     * the chest, so a quarter of a radian later the far end of that strip is hanging
+     * in mid air. A disc centred on the joint cannot do that: rotation maps it onto
+     * itself, so whatever emerges from under the belly emerges next to the limb, as
+     * the limb, which is exactly the material needed to keep the hip closed.
+     *
+     * Its radius is the limb's own half-width at the hip, with a margin. Wider buys
+     * nothing and starts to overhang; narrower leaves a notch at the top of the swing.
+     *
+     * The body only has to reach a little way under the head, which barely turns, so
+     * it gets a plain fixed overlap.
+     */
+    const regions = parts.map(() => new Uint8Array(CANVAS.w * CANVAS.h));
+    for (let i = 0; i < owner.length; i++) if (owner[i] !== -1) regions[owner[i]][i] = 1;
+
+    const inFront = new Uint8Array(parts.length * parts.length);
+    parts.forEach((a, i) =>
+      parts.forEach((b, j) => {
+        inFront[i * parts.length + j] = b.z > a.z ? 1 : 0;
+      }),
+    );
+
+    /** How far a limb reaches to either side of its joint. */
+    const hipRadius = (region, pivot) => {
+      let reach = 0;
+      for (let i = 0; i < region.length; i++) {
+        if (region[i]) reach = Math.max(reach, Math.abs((i % CANVAS.w) - pivot.x));
       }
-    }
-
-    // --- weights ----------------------------------------------------------------
-    const boneCount = bones.length;
-    let weights = new Float32Array(vertexCount * boneCount);
-    /** Which bone each vertex started out belonging to, before any relaxation. */
-    const seedOwner = new Int32Array(vertexCount);
-    /** 1 where a vertex sits on blank paper rather than on the drawing. */
-    const onPaper = new Uint8Array(vertexCount);
-    const isLimb = (index) => bones[index].id.startsWith("leg");
-
-    const gridNeighbours = (v) => {
-      const c = gridCoord[v * 2];
-      const r = gridCoord[v * 2 + 1];
-      const list = [];
-      for (const [dc, dr] of [
-        [-1, 0],
-        [1, 0],
-        [0, -1],
-        [0, 1],
-      ]) {
-        const nc = c + dc;
-        const nr = r + dr;
-        if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
-        const n = vertexOf[nr * cols + nc];
-        if (n >= 0) list.push(n);
-      }
-      return list;
+      return reach * HIP_MARGIN;
     };
 
-    for (let v = 0; v < vertexCount; v++) {
-      const x = Math.round(positions[v * 2]);
-      const y = Math.round(positions[v * 2 + 1]);
-      let owner = -1;
-      if (x >= 0 && y >= 0 && x < CANVAS.w && y < CANVAS.h) {
-        owner = owners[(y * CANVAS.w + x) * 4] - 1;
-      }
-      if (owner < 0) {
-        // Outside every polygon: hand it to the nearest pivot, so stray vertices
-        // around the silhouette edge still move with something sensible.
-        let best = 0;
-        let bestDistance = Infinity;
-        bones.forEach((bone, i) => {
-          const d = (bone.pivot.x - x) ** 2 + (bone.pivot.y - y) ** 2;
-          if (d < bestDistance) {
-            bestDistance = d;
-            best = i;
-          }
-        });
-        owner = best;
-      }
-      weights[v * boneCount + owner] = 1;
-      seedOwner[v] = owner;
-      onPaper[v] = inside(x, y) ? 0 : 1;
-    }
+    const radii = [];
+    parts.forEach((part, index) => {
+      const limb = part.id.startsWith("leg");
+      // A limb's growth is bounded by its disc, so it needs no step limit of its own.
+      const depth = limb ? Infinity : OVERLAP;
+      const radius = limb ? hipRadius(regions[index], part.pivot) : Infinity;
+      if (limb) radii.push(`${part.id} r=${Math.round(radius)}`);
+      const radiusSq = radius * radius;
 
-    /**
-     * A vertex out on the paper takes the limb it sits BESIDE, not the one whose
-     * pivot happens to be closest.
-     *
-     * Cells are kept whenever any corner is inside the drawing, so the mesh carries a
-     * ring of vertices over blank paper - including the gaps between the legs. Seeded
-     * by nearest pivot, a vertex halfway between two feet gets handed to whichever
-     * hip is nearer, which can be the leg on the far side of the gap; the boundary
-     * triangles of one leg then pull towards the other. Copying the nearest vertex
-     * that IS in the drawing keeps each one with the limb it actually borders.
-     */
-    // Spread outwards from the drawing a ring at a time, so a vertex two cells out on
-    // the paper still ends up with the limb it borders. `onPaper` itself is left
-    // alone - the seam check below needs to know which vertices carry no ink.
-    const settled = onPaper.map((paper) => (paper ? 0 : 1));
-    for (let pass = 0; pass < 4; pass++) {
-      const updated = seedOwner.slice();
-      const reached = [];
-      for (let v = 0; v < vertexCount; v++) {
-        if (settled[v]) continue;
-        let bestDistance = Infinity;
-        for (const n of gridNeighbours(v)) {
-          if (!settled[n]) continue;
-          const d =
-            (positions[n * 2] - positions[v * 2]) ** 2 +
-            (positions[n * 2 + 1] - positions[v * 2 + 1]) ** 2;
-          if (d < bestDistance) {
-            bestDistance = d;
-            updated[v] = seedOwner[n];
+      const grown = regions[index].slice();
+      let ring = [];
+      for (let i = 0; i < owner.length; i++) if (regions[index][i]) ring.push(i);
+      for (let step = 0; step < depth && ring.length; step++) {
+        const next = [];
+        for (const i of ring) {
+          const x = i % CANVAS.w;
+          for (const n of [
+            x > 0 ? i - 1 : -1,
+            x < CANVAS.w - 1 ? i + 1 : -1,
+            i - CANVAS.w,
+            i + CANVAS.w,
+          ]) {
+            if (n < 0 || n >= grown.length || grown[n]) continue;
+            // Never out onto paper: there is no ink there to grow into.
+            if (owner[n] === -1) continue;
+            // A limb may grow into ANY neighbouring part inside its disc, in front or
+            // behind. Every part samples the same sheet at the same place, so at rest
+            // two overlapping masks paint identical pixels and the overlap cannot be
+            // seen; it only starts to matter once they move apart, which is precisely
+            // when it is needed. Growing under the body keeps the hip closed; growing
+            // over the leg behind stops a notch opening where the two were drawn
+            // touching. The body is different - it is drawn last, so anything it grew
+            // over it would hide - and keeps the in-front rule.
+            if (!limb && !inFront[index * parts.length + owner[n]]) continue;
+            const dx = (n % CANVAS.w) - part.pivot.x;
+            const dy = ((n / CANVAS.w) | 0) - part.pivot.y;
+            if (dx * dx + dy * dy > radiusSq) continue;
+            grown[n] = 1;
+            next.push(n);
           }
         }
-        if (bestDistance < Infinity) reached.push(v);
+        ring = next;
       }
-      seedOwner.set(updated);
-      for (const v of reached) settled[v] = 1;
-    }
-    for (let v = 0; v < vertexCount; v++) {
-      weights.fill(0, v * boneCount, (v + 1) * boneCount);
-      weights[v * boneCount + seedOwner[v]] = 1;
-    }
+      regions[index] = grown;
+    });
 
-    // Relax: replace each vertex's weights with a blend of its grid neighbours'.
-    const neighbours = [];
-    for (let v = 0; v < vertexCount; v++) {
-      const list = [];
-      for (const n of gridNeighbours(v)) {
-        /**
-         * Weight never crosses from one limb to another.
-         *
-         * Relaxation walks the grid, and the grid knows nothing about anatomy: two
-         * legs that pass within a cell of each other on the page are neighbours as
-         * far as it is concerned, however far apart they are along the body. Left
-         * alone it pours weight straight across the gap, and since a near leg and a
-         * far leg swing in OPPOSITE directions, every vertex in between ends up
-         * dragged two ways at once. That is what makes a leg bulge and bend as it
-         * walks instead of swinging.
-         *
-         * Blocking these few edges - seven on the whole Triceratops - takes a leg
-         * vertex from keeping 0.54 of its own bone to keeping 0.82. A hip is
-         * untouched, because a thigh and a belly are not two limbs: weight still
-         * flows freely there, which is what keeps the hip soft.
-         */
-        if (isLimb(seedOwner[v]) && isLimb(seedOwner[n]) && seedOwner[v] !== seedOwner[n]) {
-          continue;
-        }
-        list.push(n);
-      }
-      neighbours.push(list);
-    }
-
-    for (let pass = 0; pass < RELAX_PASSES; pass++) {
-      const next = new Float32Array(weights.length);
-      for (let v = 0; v < vertexCount; v++) {
-        const list = neighbours[v];
-        for (let b = 0; b < boneCount; b++) {
-          let sum = 0;
-          for (const n of list) sum += weights[n * boneCount + b];
-          const average = list.length ? sum / list.length : weights[v * boneCount + b];
-          next[v * boneCount + b] =
-            weights[v * boneCount + b] * (1 - RELAX_RATE) + average * RELAX_RATE;
-        }
-      }
-      weights = next;
-    }
-
-    const boneIndex = [];
-    const boneWeight = [];
-    const offsets = [];
-    const rootBone = bones.findIndex((bone) => !bone.parent);
-
-    for (let v = 0; v < vertexCount; v++) {
-      /**
-       * A vertex may follow at most ONE limb.
-       *
-       * Two limbs in opposite phase pull a shared vertex two ways at once, and the
-       * belly between a pair of legs is full of such vertices. They are seeded to the
-       * body, so the limb-to-limb block above never sees them - but they relay between
-       * the two legs all the same, and end up carrying a third of one and a sixth of
-       * the other. The scrap of belly line they hold then tears away from the rest of
-       * it as the legs pass.
-       *
-       * Splitting a vertex between two limbs is never the right answer, so the weaker
-       * limb's share goes to the thing both of them hang off: the body.
-       */
-      let strongest = -1;
-      for (let b = 0; b < boneCount; b++) {
-        if (!isLimb(b) || weights[v * boneCount + b] <= 0) continue;
-        if (strongest < 0 || weights[v * boneCount + b] > weights[v * boneCount + strongest]) {
-          strongest = b;
-        }
-      }
-      if (strongest >= 0) {
-        for (let b = 0; b < boneCount; b++) {
-          if (!isLimb(b) || b === strongest) continue;
-          weights[v * boneCount + rootBone] += weights[v * boneCount + b];
-          weights[v * boneCount + b] = 0;
-        }
-      }
-
-      const ranked = [];
-      for (let b = 0; b < boneCount; b++) {
-        const w = weights[v * boneCount + b];
-        if (w > 0.0001) ranked.push([b, w]);
-      }
-      ranked.sort((a, b) => b[1] - a[1]);
-      if (!ranked.length) ranked.push([0, 1]);
-
-      const dominant = ranked[0][0];
-      const top = ranked.slice(0, MAX_INFLUENCES);
-
-      /**
-       * Quantise here rather than on the way out. The rig ships weights rounded to
-       * four places, and a vertex whose weights sum to 0.9999 is dragged a ten
-       * thousandth of the way towards the root pivot - harmless on its own, but it
-       * makes "weights sum to one" untrue, and an invariant that is only nearly true
-       * cannot be asserted. Rounding now and handing the remainder to the dominant
-       * influence means what ships sums to exactly one.
-       */
-      const total = top.reduce((sum, [, w]) => sum + w, 0);
-      const quantised = top.map(([, w]) => Math.round((w / total) * 1e4) / 1e4);
-      quantised[0] =
-        Math.round((1 - quantised.slice(1).reduce((sum, w) => sum + w, 0)) * 1e4) / 1e4;
-
-      for (let i = 0; i < MAX_INFLUENCES; i++) {
-        // Padding slots repeat the dominant bone at zero weight, so every slot holds a
-        // valid index and the runtime needs no bounds check in its inner loop.
-        const b = top[i] ? top[i][0] : dominant;
-        boneIndex.push(b);
-        boneWeight.push(top[i] ? quantised[i] : 0);
-        offsets.push(positions[v * 2] - bones[b].pivot.x, positions[v * 2 + 1] - bones[b].pivot.y);
-      }
-    }
-
-    const dominantOf = (v) => boneIndex[v * MAX_INFLUENCES];
-
+    // --- a masked cut-out per region --------------------------------------------
     /**
-     * Where two limbs meet on the sheet, cut the mesh.
+     * Each part ships as a rectangle of the sheet plus an alpha mask, rather than as a
+     * mesh shaped like the part.
      *
-     * A triangle reaching into two different limbs has to absorb their whole relative
-     * swing, and a near leg and a far leg swing in opposite directions - so it
-     * stretches, folds and eventually turns inside out, which renders as black shards
-     * flickering between the feet. No choice of weights avoids it: the two ends of the
-     * triangle simply have to be in two places at once.
-     *
-     * So it stops being one triangle spanning two limbs and becomes a triangle
-     * belonging to one. The limb drawn IN FRONT takes it, because at an overlap its
-     * pixels are the ones you can actually see; the limb behind gives up at most a
-     * cell of geometry, where it is hidden anyway. Vertices are copied rather than
-     * rebound, so the neighbouring triangles keep the blend that softens their hip.
-     *
-     * All three corners, not just the ones that disagree: a triangle with two rigid
-     * corners and one blended corner still deforms. Rigid on all three makes it a
-     * plain rotation, and a rotation cannot change a triangle's area at all.
-     *
-     * On a sheet whose limbs never touch this finds nothing to do, which is the point
-     * - see the assertion below.
+     * The parts are RIGID, so a mesh buys nothing but the accuracy of its own outline,
+     * and a grid's staircase is plainly visible wherever one part meets another. The
+     * mask is exact to the pixel, follows the flood - and therefore the artist's lines
+     * - and leaves the runtime with nothing to draw but a sprite.
      */
-    const rigidCopies = new Map();
-    const seams = [];
-    for (let t = 0; t < indices.length; t += 3) {
-      const corners = [indices[t], indices[t + 1], indices[t + 2]];
-      const limbs = [...new Set(corners.map(dominantOf).filter(isLimb))];
-      if (limbs.length < 2) continue;
-
-      /**
-       * Two different questions, two different tests.
-       *
-       * The CUT applies to every triangle reaching into two limbs, paper corners and
-       * all: even in the empty gap between two feet, one corner following the near leg
-       * and another following the far leg will fold the triangle over, and a folded
-       * triangle mirrors whatever ink its cell does contain.
-       *
-       * The ASSERTION at the end is about the DRAWING, so it only counts corners that
-       * carry ink. The grid keeps a ring of vertices out on blank paper so boundary
-       * cells have corners; those say nothing about whether two limbs touch, and
-       * failing a sheet over them would make the rule impossible to satisfy - there is
-       * always a point in the gap where the nearer limb changes.
-       */
-      if (corners.filter((v) => !onPaper[v]).map(dominantOf).filter(isLimb).length > 1) {
-        seams.push({
-          x: Math.round(positions[corners[0] * 2]),
-          y: Math.round(positions[corners[0] * 2 + 1]),
-          limbs: limbs.map((b) => bones[b].id),
-        });
+    const cutouts = parts.map((part, index) => {
+      const region = regions[index];
+      let minX = CANVAS.w;
+      let minY = CANVAS.h;
+      let maxX = -1;
+      let maxY = -1;
+      let area = 0;
+      for (let i = 0; i < region.length; i++) {
+        if (!region[i]) continue;
+        area++;
+        const x = i % CANVAS.w;
+        const y = (i / CANVAS.w) | 0;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
       }
+      if (area === 0) throw new Error(`part "${part.id}" claimed nothing`);
 
-      /**
-       * The ink decides who keeps the triangle - by weight, not by a show of hands.
-       *
-       * A bridging triangle in the gap between two limbs is mostly blank paper, but it
-       * still catches the edge of whatever runs past it, which near a hip is the belly
-       * line. Handing it to a limb because one inked corner happens to lean that way
-       * sends that scrap of belly flying off with the leg, leaving a notch behind - a
-       * worse artefact than the fold it was meant to cure.
-       *
-       * So the owner is whichever bone holds the most weight across the inked corners.
-       * A scrap of belly stays with the body; an overlap of two limbs goes to the limb
-       * that actually owns the pixels, and `data-z` only breaks a tie.
-       */
-      const ink = corners.filter((v) => !onPaper[v]);
-      const pool = ink.length ? ink : corners;
-      const held = new Float64Array(boneCount);
-      for (const v of pool) {
-        for (let i = 0; i < MAX_INFLUENCES; i++) {
-          held[boneIndex[v * MAX_INFLUENCES + i]] += boneWeight[v * MAX_INFLUENCES + i];
+      const box = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+      const [maskCanvas, maskCtx] = make(box.w, box.h);
+      const mask = maskCtx.createImageData(box.w, box.h);
+      for (let y = 0; y < box.h; y++) {
+        for (let x = 0; x < box.w; x++) {
+          if (!region[(y + box.y) * CANVAS.w + (x + box.x)]) continue;
+          const o = (y * box.w + x) * 4;
+          mask.data[o] = 255;
+          mask.data[o + 1] = 255;
+          mask.data[o + 2] = 255;
+          mask.data[o + 3] = 255;
         }
       }
-      let owner = 0;
-      for (let b = 1; b < boneCount; b++) {
-        const better =
-          held[b] > held[owner] || (held[b] === held[owner] && bones[b].z > bones[owner].z);
-        if (better) owner = b;
-      }
-      for (let k = 0; k < 3; k++) {
-        const v = corners[k];
-        const cacheKey = `${v}:${owner}`;
-        let copy = rigidCopies.get(cacheKey);
-        if (copy === undefined) {
-          copy = positions.length / 2;
-          positions.push(positions[v * 2], positions[v * 2 + 1]);
-          for (let i = 0; i < MAX_INFLUENCES; i++) {
-            boneIndex.push(owner);
-            boneWeight.push(i === 0 ? 1 : 0);
-            offsets.push(
-              positions[copy * 2] - bones[owner].pivot.x,
-              positions[copy * 2 + 1] - bones[owner].pivot.y,
-            );
-          }
-          rigidCopies.set(cacheKey, copy);
-        }
-        indices[t + k] = copy;
-      }
-    }
+      maskCtx.putImageData(mask, 0, 0);
 
-    /**
-     * Draw back to front, by the z the skeleton already declares.
-     *
-     * One mesh has no depth test, so what paints last wins, and that is index order.
-     * Left in the order the grid happened to produce - row by row, left to right -
-     * a far leg swinging forward paints over the near leg it should pass behind.
-     * Sorting by the dominant bone's z reproduces the drawing's own layering: tail,
-     * body, far legs, near legs, head. Stable, so within one bone the grid order and
-     * its cache behaviour survive.
-     */
-    const triangles = [];
-    for (let t = 0; t < indices.length; t += 3) {
-      let z = -Infinity;
-      for (let k = 0; k < 3; k++) z = Math.max(z, bones[dominantOf(indices[t + k])].z);
-      triangles.push({ t, z, order: triangles.length });
-    }
-    triangles.sort((a, b) => a.z - b.z || a.order - b.order);
-    const sortedIndices = [];
-    for (const { t } of triangles) {
-      sortedIndices.push(indices[t], indices[t + 1], indices[t + 2]);
-    }
-    indices = sortedIndices;
+      return { box, area, mask: maskCanvas.toDataURL("image/png") };
+    });
 
-    const meshVertexCount = positions.length / 2;
-    const uvs = [];
-    for (let v = 0; v < meshVertexCount; v++) {
-      uvs.push(positions[v * 2] / CANVAS.w, positions[v * 2 + 1] / CANVAS.h);
-    }
-
-    // --- coverage check ---------------------------------------------------------
-    // Every bit of the drawing must fall inside a kept cell, or it is simply missing.
+    // --- did anything fall through? ---------------------------------------------
     let silhouettePixels = 0;
-    let uncovered = 0;
-    for (let y = minY; y <= maxY; y++) {
-      for (let x = minX; x <= maxX; x++) {
-        if (outside[y * CANVAS.w + x]) continue;
-        silhouettePixels++;
-        const c = Math.floor((x - originX) / GRID_STEP);
-        const r = Math.floor((y - originY) / GRID_STEP);
-        const covered =
-          vertexOf[r * cols + c] >= 0 &&
-          vertexOf[r * cols + c + 1] >= 0 &&
-          vertexOf[(r + 1) * cols + c] >= 0 &&
-          vertexOf[(r + 1) * cols + c + 1] >= 0;
-        if (!covered) uncovered++;
-      }
+    let unclaimed = 0;
+    for (let i = 0; i < outside.length; i++) {
+      if (outside[i]) continue;
+      silhouettePixels++;
+      if (owner[i] === -1) unclaimed++;
     }
 
     // --- debug view -------------------------------------------------------------
     const [dbg, dbgCtx] = make(CANVAS.w, CANVAS.h);
-    dbgCtx.globalAlpha = 0.25;
+    dbgCtx.globalAlpha = 0.2;
     dbgCtx.drawImage(artCanvas, 0, 0);
     dbgCtx.globalAlpha = 1;
-    const hues = ["#e0453a", "#e88a1e", "#c9b826", "#3fa64d", "#2f8fd0", "#7a54c8", "#d052a0", "#4aa79a"];
-    for (let v = 0; v < vertexCount; v++) {
-      // Colour each vertex by its dominant bone, faded by how dominant it is: a
-      // washed-out patch is a smooth hand-off, a hard colour change is a hinge.
-      const b = boneIndex[v * MAX_INFLUENCES];
-      const w = boneWeight[v * MAX_INFLUENCES];
-      dbgCtx.fillStyle = hues[b % hues.length];
-      dbgCtx.globalAlpha = Math.max(0.12, Math.min(1, (w - 0.34) / 0.66));
-      dbgCtx.fillRect(positions[v * 2] - 5, positions[v * 2 + 1] - 5, 10, 10);
+    const hues = ["#e0453a", "#e88a1e", "#c9b826", "#3fa64d", "#2f8fd0", "#7a54c8", "#d052a0"];
+    const paint = dbgCtx.createImageData(CANVAS.w, CANVAS.h);
+    const rgb = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
+    for (let i = 0; i < owner.length; i++) {
+      if (owner[i] === -1) continue;
+      const [r, g, b] = rgb(hues[owner[i] % hues.length]);
+      paint.data[i * 4] = r;
+      paint.data[i * 4 + 1] = g;
+      paint.data[i * 4 + 2] = b;
+      paint.data[i * 4 + 3] = 130;
     }
-    dbgCtx.globalAlpha = 1;
-    for (const bone of bones) {
+    // the buried part of each limb, brighter, so the hidden overlap is visible
+    parts.forEach((part, index) => {
+      if (!part.id.startsWith("leg")) return;
+      const [r, g, b] = rgb(hues[index % hues.length]);
+      for (let i = 0; i < owner.length; i++) {
+        if (!regions[index][i] || owner[i] === index) continue;
+        paint.data[i * 4] = r;
+        paint.data[i * 4 + 1] = g;
+        paint.data[i * 4 + 2] = b;
+        paint.data[i * 4 + 3] = 235;
+      }
+    });
+    const [tint, tintCtx] = make(CANVAS.w, CANVAS.h);
+    tintCtx.putImageData(paint, 0, 0);
+    dbgCtx.drawImage(tint, 0, 0);
+    for (const part of parts) {
       dbgCtx.fillStyle = "#000";
       dbgCtx.beginPath();
-      dbgCtx.arc(bone.pivot.x, bone.pivot.y, 7, 0, Math.PI * 2);
+      dbgCtx.arc(part.pivot.x, part.pivot.y, 7, 0, Math.PI * 2);
       dbgCtx.fill();
     }
 
@@ -644,35 +476,28 @@ const built = await page.evaluate(
       silhouette: silCanvas.toDataURL("image/png"),
       lineart: lineCanvas.toDataURL("image/png"),
       shade: shadeCanvas.toDataURL("image/png"),
-      mesh: {
-        vertexCount: meshVertexCount,
-        gridVertexCount: vertexCount,
-        positions,
-        uvs,
-        indices,
-        boneIndex,
-        boneWeight,
-        offsets,
-      },
-      seams,
+      cutouts,
+      radii,
       silhouettePixels,
-      uncovered,
+      unclaimed,
       debug: dbg.toDataURL("image/png"),
     };
   },
   {
-    bones,
+    parts,
+    cut,
     artworkDataUrl,
     CANVAS,
     PAPER_LEVEL,
     INK_FLOOR,
+    INK_WALL,
     SHADE_STRENGTH,
     SHADE_BLUR,
     SHADE_OFFSET,
-    GRID_STEP,
-    MAX_INFLUENCES,
-    RELAX_PASSES,
-    RELAX_RATE,
+    CUT_BELOW,
+    CUT_WIDTH,
+    OVERLAP,
+    HIP_MARGIN,
   },
 );
 
@@ -687,35 +512,43 @@ for (const name of ["silhouette", "lineart", "shade"]) {
   writeFileSync(`${layerDir}/${name}.png`, decode(built[name]));
 }
 
+// One alpha mask per part. Shared by every dinosaur of the species, like the layers.
+mkdirSync(`${layerDir}/parts`, { recursive: true });
+parts.forEach((part, index) => {
+  writeFileSync(`${layerDir}/parts/${part.id}.png`, decode(built.cutouts[index].mask));
+});
+
 if (process.env.RIG_DEBUG) {
   writeFileSync(resolve(process.env.RIG_DEBUG), decode(built.debug));
   console.log(`  debug overlay -> ${process.env.RIG_DEBUG}`);
 }
 
-const byId = new Set(bones.map((b) => b.id));
-for (const bone of bones) {
-  if (bone.parent && !byId.has(bone.parent)) {
-    throw new Error(`bone "${bone.id}" names unknown parent "${bone.parent}"`);
+const byId = new Set(parts.map((p) => p.id));
+for (const part of parts) {
+  if (part.parent && !byId.has(part.parent)) {
+    throw new Error(`part "${part.id}" names unknown parent "${part.parent}"`);
   }
 }
-if (bones.filter((b) => !b.parent).length !== 1) {
-  throw new Error("expected exactly one root bone");
-}
 
-const root = bones.find((b) => !b.parent);
-const { positions } = built.mesh;
+const root = parts.find((p) => !p.parent);
+if (!root) throw new Error(`${slug} has no root part`);
+
+/**
+ * How far the drawing reaches from the ROOT PIVOT, which is where the world positions
+ * a dinosaur from. The pivot sits inside the body, nowhere near the middle of the
+ * artwork - a Triceratops reaches much further forward, into its frill and horns, than
+ * it does back into its tail - so callers that need to know when the animal is off
+ * screen have to use these, not half the artwork's width.
+ */
 let footDrop = -Infinity;
 let left = Infinity;
 let right = -Infinity;
-for (let v = 0; v < built.mesh.vertexCount; v++) {
-  footDrop = Math.max(footDrop, positions[v * 2 + 1] - root.pivot.y);
-  left = Math.min(left, positions[v * 2] - root.pivot.x);
-  right = Math.max(right, positions[v * 2] - root.pivot.x);
+for (const { box } of built.cutouts) {
+  footDrop = Math.max(footDrop, box.y + box.h - root.pivot.y);
+  left = Math.min(left, box.x - root.pivot.x);
+  right = Math.max(right, box.x + box.w - root.pivot.x);
 }
 
-const round = (values, places) => values.map((n) => Number(n.toFixed(places)));
-
-mkdirSync(resolve("world/rigs"), { recursive: true });
 const outPath = resolve(`world/rigs/${slug}.json`);
 writeFileSync(
   outPath,
@@ -731,63 +564,43 @@ writeFileSync(
       },
       footDrop,
       extent: { left, right },
-      bones: bones.map((b) => ({ id: b.id, parent: b.parent, pivot: b.pivot })),
-      mesh: {
-        vertexCount: built.mesh.vertexCount,
-        gridVertexCount: built.mesh.gridVertexCount,
-        influences: MAX_INFLUENCES,
-        positions: round(built.mesh.positions, 2),
-        uvs: round(built.mesh.uvs, 5),
-        indices: built.mesh.indices,
-        boneIndex: built.mesh.boneIndex,
-        boneWeight: round(built.mesh.boneWeight, 4),
-        offsets: round(built.mesh.offsets, 2),
-      },
+      // in draw order, back to front
+      parts: parts.map((part, index) => ({
+        id: part.id,
+        parent: part.parent,
+        pivot: part.pivot,
+        z: part.z,
+        box: built.cutouts[index].box,
+        mask: `/assets/dino/${slug}/parts/${part.id}.png`,
+      })),
     },
     null,
     1,
   )}\n`,
 );
 
-const missed = (built.uncovered / built.silhouettePixels) * 100;
-console.log(`${slug}: ${bones.length} bones, ${built.mesh.vertexCount} vertices -> ${outPath}`);
+console.log(`${slug}: ${parts.length} parts -> ${outPath}`);
 console.log(
-  `  artwork ${Math.round(built.placement.w)}x${Math.round(built.placement.h)} ` +
-    `at ${Math.round(built.placement.x)},${Math.round(built.placement.y)}`,
+  `  artwork ${Math.round(built.placement.w)}x${Math.round(built.placement.h)} at ` +
+    `${Math.round(built.placement.x)},${Math.round(built.placement.y)}`,
 );
-console.log(`  triangles ${built.mesh.indices.length / 3}, uncovered ${missed.toFixed(2)}%`);
+parts.forEach((part, index) => {
+  const { box, area } = built.cutouts[index];
+  console.log(
+    `  z${part.z} ${part.id.padEnd(13)} ${String(box.w).padStart(4)}x${String(box.h).padEnd(4)}` +
+      ` at ${String(box.x).padStart(4)},${String(box.y).padStart(3)}` +
+      `  ${String(Math.round(area / 1000)).padStart(3)}k px`,
+  );
+});
 
-/**
- * No triangle may reach into two different limbs.
- *
- * This is the sheet's contract with the rig, and it is a property of the DRAWING, not
- * of anything the solver can fix afterwards. Two limbs that touch on the paper share
- * mesh, and they swing in opposite directions, so the triangles between them are asked
- * to be in two places at once: they stretch, fold, invert, and render as black shards
- * between the feet. Weights can soften it, but softening every limb on the animal to
- * do so is what made the legs bulge as they walked.
- *
- * So the drawing has to keep its limbs apart - about 40 canonical pixels, a little
- * over a grid step, which is the furthest one triangle can reach. Checked here rather
- * than trusted, because the failure is invisible in the artwork and only shows up as
- * a flicker once something is walking.
- *
- * The cut above still runs, and still resolves anything that does slip through, but
- * this failing means a sheet needs redrawing rather than a rig needs tuning.
- */
-if (built.seams.length) {
-  const where = built.seams
-    .slice(0, 6)
-    .map((s) => `${s.limbs.join(" + ")} at ${s.x},${s.y}`)
-    .join("\n    ");
+console.log(`  hip discs  ${built.radii.join("  ")}`);
+const missed = (built.unclaimed / built.silhouettePixels) * 100;
+console.log(`  unclaimed ${missed.toFixed(2)}% of the drawing`);
+if (missed > 0.5) {
   console.error(
-    `\n  ${slug}: ${built.seams.length} triangles reach into two limbs at once.\n` +
-      `  The drawing has limbs touching, which no amount of rigging survives.\n` +
-      `  Separate them on the sheet by ~40 canonical px and rebuild.\n    ${where}` +
-      (built.seams.length > 6 ? `\n    ...and ${built.seams.length - 6} more` : ""),
+    `\n  ${slug}: ${missed.toFixed(1)}% of the drawing belongs to no part.\n` +
+      `  A seed is probably walled off from part of its own region.\n` +
+      `  RIG_DEBUG=out.png shows what each part claimed.`,
   );
   process.exit(1);
-}
-if (missed > 0.5) {
-  console.error(`  WARNING: ${missed.toFixed(2)}% of the drawing is outside the mesh.`);
 }

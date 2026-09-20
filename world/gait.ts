@@ -4,6 +4,10 @@
  * Separated from the rig so the same curve drives the runtime, the offline preview and
  * the tests. A gait defect that only appears mid-stride is exactly the kind that
  * survives every check when the only thing anyone ever renders is the rest pose.
+ *
+ * The tail used to swing here and no longer does. It rides with the body, because its
+ * junction has no drawn line for a cut to hide behind - see the note in the rig SVG.
+ * Unknown ids simply stay still, so it costs nothing to leave that door open.
  */
 
 export interface GaitClock {
@@ -59,10 +63,6 @@ export function poseGait(
       // A real stride, now that the drawing bends rather than coming apart. The far
       // pair swings a little less, which is most of what reads as perspective.
       out[i] = Math.sin(warped) * 0.4 * speed * (id.includes("Far") ? 0.84 : 1);
-    } else if (id === "tail") {
-      // Slower than the gait and slightly behind it, so the tail trails the body
-      // rather than beating time with the legs.
-      out[i] = Math.sin(phase * 0.42 - 0.7) * (0.05 + 0.075 * speed) + 0.03;
     } else if (id === "head") {
       // Leads the stride a little, and keeps breathing when standing still.
       out[i] = Math.sin(phase * 0.5 + 0.9) * 0.035 * speed + Math.sin(breath) * 0.014;

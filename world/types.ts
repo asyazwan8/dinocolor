@@ -1,40 +1,37 @@
 /**
- * A rig is one continuous drawing plus a skeleton that bends it.
+ * A rig is the printed drawing cut into pieces that each move rigidly.
  *
- * Nothing here slices the artwork. The mesh below covers the whole silhouette, each
- * vertex is bound to a few bones, and bending the bones bends the drawing as a single
- * sheet - which is what makes a seam impossible rather than merely well hidden.
+ * Nothing here deforms. Blend skinning cannot be seamless at a joint - the weights
+ * must swing from one bone to the other somewhere, and the two bones differ most
+ * exactly there, so whatever ink crosses that hand-off is sheared. Rigid parts have no
+ * hand-off, so there is nothing to shear.
  *
- * Everything is in canonical texture pixels: the same 1200x800 space the capture
- * pipeline rectifies a photographed sheet into, so a vertex's UV is just its rest
- * position over the texture size.
+ * What makes the cuts invisible is where they are put, not how they are blended:
+ * `parts` is in DRAW ORDER, back to front, and every moving part comes before the body
+ * so the body paints over the cut across its top.
+ *
+ * Everything is in canonical texture pixels - the same 1200x800 space the capture
+ * pipeline rectifies a photographed sheet into - so a vertex's UV is just its rest
+ * position over the texture size, and every part samples the one shared texture.
  */
 
-export interface RigBone {
+export interface RigPart {
   id: string;
   parent: string | null;
-  /** Joint this bone rotates about, in canonical texture pixels. */
+  /** Joint this part rotates about, in canonical texture pixels. */
   pivot: { x: number; y: number };
-}
-
-export interface RigMesh {
-  vertexCount: number;
-  /** Bones allowed to influence one vertex. Every vertex carries exactly this many. */
-  influences: number;
-  /** Rest positions, 2 per vertex, in canonical texture pixels. */
-  positions: number[];
-  /** 2 per vertex, rest position over texture size. */
-  uvs: number[];
-  indices: number[];
-  /** `influences` per vertex, indexing into `Rig.bones`. */
-  boneIndex: number[];
-  /** `influences` per vertex, summing to 1. Unused slots are 0. */
-  boneWeight: number[];
+  /** Draw order, back to front. */
+  z: number;
+  /** The rectangle of the canonical texture this part is cut from. */
+  box: { x: number; y: number; w: number; h: number };
   /**
-   * 2 per influence: the vertex's rest position relative to that bone's pivot.
-   * Precomputed so the runtime never subtracts a pivot per vertex per frame.
+   * Alpha mask of the part's exact shape, the size of `box`.
+   *
+   * The shape comes from flooding out from a seed until the printed ink stops it, so
+   * it follows the artist's own lines to the pixel. Shared by every dinosaur of the
+   * species; only the colouring underneath it differs.
    */
-  offsets: number[];
+  mask: string;
 }
 
 export interface Rig {
@@ -54,6 +51,6 @@ export interface Rig {
    * the animal is off screen have to use these, not half the artwork's width.
    */
   extent: { left: number; right: number };
-  bones: RigBone[];
-  mesh: RigMesh;
+  /** Back to front. */
+  parts: RigPart[];
 }

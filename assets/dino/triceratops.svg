@@ -1,53 +1,58 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800"
      data-artwork="/assets/dino/triceratops.png">
   <!--
-    Dino Colourise - Triceratops skeleton.
+    Dino Colourise - Triceratops parts.
 
-    The printed artwork is the PNG named in data-artwork. This file does not draw the
-    dinosaur and no longer cuts it up either: the drawing stays whole, and these
-    polygons only say which bone each region of it belongs to.
+    The printed artwork is the PNG named in data-artwork. This file draws nothing. It
+    says where each moving part STARTS, and lets the artist's own lines say where it
+    ends: buildRig floods outward from each seed through the drawing's interior, and
+    the printed outlines stop it. A part boundary is therefore always a line somebody
+    drew, never one we invented - which is the whole lesson of the last four attempts.
 
-    That is a weight SEED, not a boundary. buildRig gives every mesh vertex a hard
-    owner from these polygons, then relaxes the field across neighbouring vertices
-    until the hand-offs become gradients. So a polygon has to be roughly right about
-    which limb a region belongs to, and nothing more - a few pixels either way simply
-    shifts where one bone's influence fades into the next.
+    The one boundary the drawing does not provide is between the body and the legs,
+    because the belly line is interrupted wherever a leg meets it. `cut-belly` closes
+    those gaps. It is traced just ON the belly ink, and buildRig offsets it downwards a
+    few pixels so that the ink itself stays with the BODY - a belly line that swung
+    with a leg would be the very artefact this is meant to remove.
 
-    The earlier version cut the drawing into eight masks along these same lines, which
-    is why the legs looked chopped off: the boundaries were straight lines that exist
-    nowhere in the drawing, and rotating a limb swung them across the body. Nothing is
-    cut now, so there is no edge to expose.
+    DRAW ORDER IS THE DESIGN. data-z stacks the parts, and every moving part sits
+    BEHIND the body:
 
-    Two consequences for how they are drawn. Leg polygons stop at the upper thigh
-    rather than reaching into the belly - claiming torso would make the belly swing
-    with the leg. And the frill is part of the head, not its own bone: on a real
-    Triceratops the frill IS the skull, so a joint there could only ever wobble.
+        far legs -> near legs -> body (+tail) -> head
 
-    data-z is a tiebreak for overlaps only; limbs sit above the body so a thigh
-    overlapping the torso resolves to the limb.
+    A leg's top is cut somewhere inside the torso, and the body is painted over it, so
+    that cut can never be seen at any angle. The head is the exception: it is drawn in
+    front, which is allowed only because the frill gives it a real drawn outline to be
+    bounded by. The tail has no such line, so it rides with the body for now.
+
+    NEAR AND FAR, read off the drawing rather than assumed: the near legs are drawn
+    lower and larger. Measured from the silhouette, the left rear foot bottoms at y=744
+    and the right at y=712, so the left one is the near one - the opposite of what this
+    file said through revisions 4 to 7, which had the diagonal gait pairing the wrong
+    limbs together.
   -->
+
+  <!-- The belly, traced along the drawn line. Canonical pixels. -->
+  <polyline id="cut-belly" points="361,485 380,479 450,500 521,522 593,538 629,544
+                                   671,536 736,518 807,498 861,484 896,479 941,487"/>
+
   <g id="parts">
-    <polygon id="part-tail" data-parent="body" data-pivot="360,430" data-z="2"
-      points="44,436 132,398 250,334 344,300 404,306 412,420 404,512 300,532 150,520 40,492"/>
+    <circle id="part-legRearFar" data-parent="body" data-z="1"
+            data-pivot="563,513" cx="562" cy="589" r="5"/>
 
-    <polygon id="part-body" data-parent="" data-pivot="560,390" data-z="3"
-      points="316,300 392,236 520,182 660,176 760,206 812,268 836,352 840,446
-              816,530 700,566 520,574 400,552 340,486 312,404"/>
+    <circle id="part-legFrontFar" data-parent="body" data-z="2"
+            data-pivot="836,475" cx="838" cy="589" r="5"/>
 
-    <polygon id="part-legRearFar" data-parent="body" data-pivot="413,529" data-z="4"
-      points="358,529 376,474 451,474 469,529 447,591 452,654 343,654 347,591"/>
+    <circle id="part-legRearNear" data-parent="body" data-z="3"
+            data-pivot="447,482" cx="441" cy="607" r="5"/>
 
-    <polygon id="part-legFrontFar" data-parent="body" data-pivot="716,571" data-z="5"
-      points="661,571 679,516 753,516 771,571 754,616 759,661 650,661 654,616"/>
+    <circle id="part-legFrontNear" data-parent="body" data-z="4"
+            data-pivot="727,504" cx="727" cy="616" r="5"/>
 
-    <polygon id="part-legRearNear" data-parent="body" data-pivot="567,571" data-z="6"
-      points="512,571 530,515 604,515 622,571 605,625 610,680 499,680 504,625"/>
+    <circle id="part-body" data-parent="" data-z="5"
+            data-pivot="560,390" cx="520" cy="360" r="5"/>
 
-    <polygon id="part-legFrontNear" data-parent="body" data-pivot="880,517" data-z="7"
-      points="825,517 843,462 918,462 936,517 941,597 946,677 835,677 840,597"/>
-
-    <polygon id="part-head" data-parent="body" data-pivot="718,420" data-z="8"
-      points="684,300 700,190 770,124 880,120 946,170 1040,164 1160,200 1156,300
-              1110,328 1152,380 1144,470 1086,542 970,540 880,486 812,452 700,424"/>
+    <circle id="part-head" data-parent="body" data-z="6"
+            data-pivot="718,420" cx="843" cy="268" r="5"/>
   </g>
 </svg>
