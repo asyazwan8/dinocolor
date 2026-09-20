@@ -105,13 +105,87 @@ const png = await page.evaluate(
     tex.globalCompositeOperation = "source-over";
     tex.drawImage(lineart, 0, 0, w, h);
 
-    // Cut one piece per part, from the one sheet, at its rest position.
-    const cutouts = rig.parts.map((part, i) => {
+    /**
+     * The same sheet with the printed lines filled in by the nearest colour, for the
+     * hidden half of every part. Kept in step with `world/composite.ts` by hand - the
+     * runtime's version cannot be imported into a page evaluate - and it has to be,
+     * because the whole point of this strip is that it renders what the screen renders.
+     */
+    const pixels = tex.getImageData(0, 0, w, h);
+    const lines = (() => {
+      const [, c] = make(w, h);
+      c.drawImage(lineart, 0, 0, w, h);
+      return c.getImageData(0, 0, w, h).data;
+    })();
+
+    // Same three numbers as world/composite.ts: what counts as ink, how far the ink
+    // mask is grown to swallow the photograph's own registration slop, and what counts
+    // as part of the drawing rather than bare paper.
+    const INK_ALPHA = 20;
+    const INK_GROW = 3;
+    const OPAQUE = 200;
+
+    let ink = new Uint8Array(w * h);
+    for (let i = 0; i < ink.length; i++) ink[i] = lines[i * 4 + 3] > INK_ALPHA ? 1 : 0;
+    for (let pass = 0; pass < INK_GROW; pass++) {
+      const grown = ink.slice();
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const i = y * w + x;
+          if (ink[i] || ink[i - 1] || ink[i + 1] || ink[i - w] || ink[i + w]) grown[i] = 1;
+        }
+      }
+      ink = grown;
+    }
+
+    const clean = new Uint8ClampedArray(pixels.data);
+    const done = new Uint8Array(w * h);
+    const queue = new Int32Array(w * h);
+    let tail = 0;
+    for (let i = 0; i < done.length; i++) {
+      if (pixels.data[i * 4 + 3] < OPAQUE || ink[i]) continue;
+      done[i] = 1;
+      queue[tail++] = i;
+    }
+    for (let head = 0; head < tail; head++) {
+      const i = queue[head];
+      const x = i % w;
+      for (const n of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+        if (n < 0 || n >= done.length || done[n]) continue;
+        if (pixels.data[n * 4 + 3] < OPAQUE) continue;
+        clean[n * 4] = clean[i * 4];
+        clean[n * 4 + 1] = clean[i * 4 + 1];
+        clean[n * 4 + 2] = clean[i * 4 + 2];
+        clean[n * 4 + 3] = 255;
+        done[n] = 1;
+        queue[tail++] = n;
+      }
+    }
+
+    // Cut one piece per part, at its rest position: the sheet as printed where the
+    // mask's red channel says the pixel is seen, the filled-in sheet where it does not.
+    const cutouts = rig.parts.map((part, index) => {
       const { box } = part;
       const [piece, cut] = make(box.w, box.h);
-      cut.drawImage(texture, -box.x, -box.y);
-      cut.globalCompositeOperation = "destination-in";
-      cut.drawImage(masks[i], 0, 0);
+
+      const [, maskCtx] = make(box.w, box.h);
+      maskCtx.drawImage(masks[index], 0, 0);
+      const mask = maskCtx.getImageData(0, 0, box.w, box.h).data;
+
+      const out = cut.createImageData(box.w, box.h);
+      for (let y = 0; y < box.h; y++) {
+        for (let x = 0; x < box.w; x++) {
+          const o = (y * box.w + x) * 4;
+          if (mask[o + 3] < 128) continue;
+          const from = mask[o] > 128 ? pixels.data : clean;
+          const i = ((y + box.y) * w + (x + box.x)) * 4;
+          out.data[o] = from[i];
+          out.data[o + 1] = from[i + 1];
+          out.data[o + 2] = from[i + 2];
+          out.data[o + 3] = 255;
+        }
+      }
+      cut.putImageData(out, 0, 0);
       return piece;
     });
 

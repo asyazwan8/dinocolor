@@ -32,20 +32,34 @@ const indexOf = (id: string) => {
   return i!;
 };
 
-/** One part's alpha mask, read back as a predicate in canonical texture pixels. */
+/**
+ * One part's mask, read back as predicates in canonical texture pixels.
+ *
+ * Two levels, and which channel carries which matters: ALPHA says the pixel belongs to
+ * the part, RED says it is one of the ones that can actually be seen. The other ones
+ * are behind something at rest and are composited from a sheet with the printed lines
+ * filled in, so that nothing line-like can slide out when the part moves.
+ */
 function readMask(part: RigPart) {
   const png = PNG.sync.read(readFileSync(resolve(__dirname, "../public" + part.mask)));
   expect(png.width, `${part.id} mask width`).toBe(part.box.w);
   expect(png.height, `${part.id} mask height`).toBe(part.box.h);
-  return (x: number, y: number): boolean => {
+
+  const at = (x: number, y: number, channel: number): number => {
     const lx = Math.round(x) - part.box.x;
     const ly = Math.round(y) - part.box.y;
-    if (lx < 0 || ly < 0 || lx >= png.width || ly >= png.height) return false;
-    return png.data[(ly * png.width + lx) * 4 + 3] > 128;
+    if (lx < 0 || ly < 0 || lx >= png.width || ly >= png.height) return 0;
+    return png.data[(ly * png.width + lx) * 4 + channel];
+  };
+
+  return {
+    covers: (x: number, y: number) => at(x, y, 3) > 128,
+    shown: (x: number, y: number) => at(x, y, 3) > 128 && at(x, y, 0) > 128,
   };
 }
 
-const masks = new Map(rig.parts.map((part) => [part.id, readMask(part)]));
+const parts = new Map(rig.parts.map((part) => [part.id, readMask(part)]));
+const masks = new Map([...parts].map(([id, part]) => [id, part.covers]));
 const legs = rig.parts.filter((part) => part.id.startsWith("leg"));
 
 /** Local rotations for one frame of the walk, at full pace. */
@@ -88,6 +102,66 @@ describe("the design rule", () => {
       expect(leg.z, `${leg.id} is drawn in front of the body`).toBeLessThan(body!.z);
       expect(leg.parent).toBe("body");
     }
+  });
+});
+
+describe("the mask says what is seen", () => {
+  /**
+   * Most of a limb is not visible: it carries on under the belly so that no swing can
+   * open a gap at the hip. That hidden half is where the printed belly line ends up
+   * being duplicated, so `composite` colours it from a sheet with the lines filled in
+   * - and it can only do that if the mask says which half is which.
+   *
+   * Being hidden means being painted over by a part drawn LATER, nothing else. A limb
+   * also grows sideways over the limb behind it, and that material is on top rather
+   * than underneath: it keeps the sheet exactly as printed, because filling the lines
+   * out of it would rub out the outline of the leg behind while the two still overlap.
+   */
+  it("marks a hidden half on every limb and none on the part drawn last", () => {
+    for (const leg of legs) {
+      const mask = parts.get(leg.id)!;
+      let shown = 0;
+      let hidden = 0;
+      for (let y = leg.box.y; y < leg.box.y + leg.box.h; y++) {
+        for (let x = leg.box.x; x < leg.box.x + leg.box.w; x++) {
+          if (!mask.covers(x, y)) continue;
+          if (mask.shown(x, y)) shown++;
+          else hidden++;
+        }
+      }
+      expect(shown, `${leg.id} is never seen at all`).toBeGreaterThan(1000);
+      expect(hidden, `${leg.id} has nothing buried to keep its hip closed`)
+        .toBeGreaterThan(1000);
+    }
+
+    const last = rig.parts[rig.parts.length - 1];
+    const front = parts.get(last.id)!;
+    for (let y = last.box.y; y < last.box.y + last.box.h; y++) {
+      for (let x = last.box.x; x < last.box.x + last.box.w; x++) {
+        if (!front.covers(x, y)) continue;
+        expect(front.shown(x, y), `${last.id} is drawn last and cannot be hidden`)
+          .toBe(true);
+      }
+    }
+  });
+
+  it("agrees with the draw order, pixel for pixel", () => {
+    rig.parts.forEach((part, index) => {
+      const mask = parts.get(part.id)!;
+      const over = rig.parts.slice(index + 1).map((p) => parts.get(p.id)!);
+
+      for (let y = part.box.y; y < part.box.y + part.box.h; y++) {
+        for (let x = part.box.x; x < part.box.x + part.box.w; x++) {
+          if (!mask.covers(x, y)) continue;
+          const painted = over.some((other) => other.covers(x, y));
+          expect(
+            mask.shown(x, y),
+            `${part.id} at ${x},${y} is marked ${mask.shown(x, y) ? "seen" : "hidden"} ` +
+              `but is ${painted ? "" : "not "}painted over`,
+          ).toBe(!painted);
+        }
+      }
+    });
   });
 });
 

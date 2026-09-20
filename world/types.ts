@@ -25,11 +25,17 @@ export interface RigPart {
   /** The rectangle of the canonical texture this part is cut from. */
   box: { x: number; y: number; w: number; h: number };
   /**
-   * Alpha mask of the part's exact shape, the size of `box`.
+   * Mask of the part's exact shape, the size of `box`. Two channels, two questions:
+   *
+   *   alpha  does this pixel belong to the part at all
+   *   red    is it ever seen, or is it painted over by a part drawn later
    *
    * The shape comes from flooding out from a seed until the printed ink stops it, so
-   * it follows the artist's own lines to the pixel. Shared by every dinosaur of the
-   * species; only the colouring underneath it differs.
+   * it follows the artist's own lines to the pixel, and then growing under whatever
+   * covers it so no swing can open a gap. That second, hidden half is what `red`
+   * marks: it is composited from a sheet with the printed lines filled in, because it
+   * carries a copy of the belly line and a limb that swings would slide that copy out
+   * into view. Shared by every dinosaur of the species; only the colouring differs.
    */
   mask: string;
 }

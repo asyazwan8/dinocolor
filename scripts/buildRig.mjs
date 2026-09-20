@@ -377,6 +377,28 @@ const built = await page.evaluate(
       regions[index] = grown;
     });
 
+    // --- which of each part can actually be seen --------------------------------
+    /**
+     * A part's region is not all visible: the parts are painted in order, so anything a
+     * LATER part also covers is hidden at rest. That is most of a limb - the whole of
+     * what was buried under the belly - and it is the half that has to be coloured
+     * without the printed lines, because it is the half that swings out into view.
+     *
+     * Note this is about being painted over, not about how the pixel was acquired. A
+     * limb also grows sideways over the limb BEHIND it, to stop a notch opening where
+     * the two were drawn touching, and that material is on top rather than underneath.
+     * It keeps the sheet exactly as printed: erasing the lines there would rub out the
+     * outline of the leg behind while the two are still overlapping.
+     */
+    const hidden = parts.map(() => new Uint8Array(CANVAS.w * CANVAS.h));
+    parts.forEach((_, index) => {
+      for (let over = index + 1; over < parts.length; over++) {
+        for (let i = 0; i < hidden[index].length; i++) {
+          if (regions[over][i]) hidden[index][i] = 1;
+        }
+      }
+    });
+
     // --- a masked cut-out per region --------------------------------------------
     /**
      * Each part ships as a rectangle of the sheet plus an alpha mask, rather than as a
@@ -411,9 +433,15 @@ const built = await page.evaluate(
       const mask = maskCtx.createImageData(box.w, box.h);
       for (let y = 0; y < box.h; y++) {
         for (let x = 0; x < box.w; x++) {
-          if (!region[(y + box.y) * CANVAS.w + (x + box.x)]) continue;
+          const i = (y + box.y) * CANVAS.w + (x + box.x);
+          if (!region[i]) continue;
           const o = (y * box.w + x) * 4;
-          mask.data[o] = 255;
+          // Alpha says whether the pixel belongs to this part; red says whether it is
+          // ever seen. The level goes in a colour channel rather than in alpha because
+          // a canvas premultiplies, so an intermediate alpha does not survive the round
+          // trip through a PNG, and a colour channel of an opaque pixel does. It also
+          // leaves anything that reads only alpha working unchanged.
+          mask.data[o] = hidden[index][i] ? 0 : 255;
           mask.data[o + 1] = 255;
           mask.data[o + 2] = 255;
           mask.data[o + 3] = 255;
