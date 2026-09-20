@@ -241,6 +241,7 @@ const parts = rig.parts.map((part) => {
   };
 });
 
+
 // --- the field ---------------------------------------------------------------------
 /** Bilinear sample, clamped at the page edge. */
 function sample(field, x, y) {
@@ -257,6 +258,12 @@ function sample(field, x, y) {
   return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
 }
 
+/** Polynomial smooth minimum: fuses two surfaces into one instead of creasing them. */
+function smin(a, b, k) {
+  const h = Math.max(0, k - Math.abs(a - b)) / k;
+  return Math.min(a, b) - h * h * k * 0.25;
+}
+
 /**
  * One part's distance to its own surface: inside the drawn region and within the
  * thickness the region's width implies. The cross-section is a circle of the local
@@ -269,12 +276,6 @@ function partField(part, x, y, z) {
   const r = Math.max(d, sample(part.radius, x, y));
   const half = Math.sqrt(Math.max(0, d * (2 * r - d))) * DEPTH_SCALE;
   return Math.max(-d, Math.abs(z - part.z) - half);
-}
-
-/** Polynomial smooth minimum: fuses two surfaces into one instead of creasing them. */
-function smin(a, b, k) {
-  const h = Math.max(0, k - Math.abs(a - b)) / k;
-  return Math.min(a, b) - h * h * k * 0.25;
 }
 
 function field(x, y, z) {
@@ -354,6 +355,20 @@ for (let k = 0; k < nz; k++) {
 }
 
 const indices = [];
+/**
+ * The vertex a cell contributed, or -1 if there is no such cell.
+ *
+ * The bounds check is the whole of it. Indexing a cell past the end does not fail - it
+ * folds round into the next slice and hands back a real vertex from somewhere else
+ * entirely - so a quad on the far boundary would stitch itself to a point halfway
+ * across the animal. That is what put long flat blades through the hip and tore a hole
+ * beside them, and it was there in the rest pose all along, hidden under the texture.
+ */
+const vertexOf = (i, j, k) => {
+  if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) return -1;
+  return cellVertex[cellAt(i, j, k)];
+};
+
 const quad = (a, b, c, d, flip) => {
   if (a < 0 || b < 0 || c < 0 || d < 0) return;
   // Wound so the front face is the one whose normal points out of the surface, which
@@ -366,30 +381,30 @@ for (let k = 0; k < gz; k++) {
   for (let j = 0; j < gy; j++) {
     for (let i = 0; i < gx; i++) {
       const here = grid[at(i, j, k)] < 0;
-      if (i + 1 < gx && j > 0 && k > 0 && here !== grid[at(i + 1, j, k)] < 0) {
+      if (i + 1 < gx && here !== grid[at(i + 1, j, k)] < 0) {
         quad(
-          cellVertex[cellAt(i, j - 1, k - 1)],
-          cellVertex[cellAt(i, j, k - 1)],
-          cellVertex[cellAt(i, j, k)],
-          cellVertex[cellAt(i, j - 1, k)],
+          vertexOf(i, j - 1, k - 1),
+          vertexOf(i, j, k - 1),
+          vertexOf(i, j, k),
+          vertexOf(i, j - 1, k),
           here,
         );
       }
-      if (j + 1 < gy && i > 0 && k > 0 && here !== grid[at(i, j + 1, k)] < 0) {
+      if (j + 1 < gy && here !== grid[at(i, j + 1, k)] < 0) {
         quad(
-          cellVertex[cellAt(i - 1, j, k - 1)],
-          cellVertex[cellAt(i, j, k - 1)],
-          cellVertex[cellAt(i, j, k)],
-          cellVertex[cellAt(i - 1, j, k)],
+          vertexOf(i - 1, j, k - 1),
+          vertexOf(i, j, k - 1),
+          vertexOf(i, j, k),
+          vertexOf(i - 1, j, k),
           !here,
         );
       }
-      if (k + 1 < gz && i > 0 && j > 0 && here !== grid[at(i, j, k + 1)] < 0) {
+      if (k + 1 < gz && here !== grid[at(i, j, k + 1)] < 0) {
         quad(
-          cellVertex[cellAt(i - 1, j - 1, k)],
-          cellVertex[cellAt(i, j - 1, k)],
-          cellVertex[cellAt(i, j, k)],
-          cellVertex[cellAt(i - 1, j, k)],
+          vertexOf(i - 1, j - 1, k),
+          vertexOf(i, j - 1, k),
+          vertexOf(i, j, k),
+          vertexOf(i - 1, j, k),
           here,
         );
       }

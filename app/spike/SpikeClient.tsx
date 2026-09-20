@@ -32,6 +32,8 @@ export default function SpikeClient() {
   const frozen = params.get("phase");
   const speed = params.get("speed") === null ? 1 : Number(params.get("speed")) || 0;
   const bare = params.get("bare") === "1";
+  /** ?debug=normals paints the surface by its normals, where a fold is unmistakable. */
+  const debug = params.get("debug");
 
   useEffect(() => {
     const host = hostRef.current;
@@ -80,7 +82,9 @@ export default function SpikeClient() {
 
       const creature = await makeCreature(
         creatureData as CreatureData,
-        paperMaterial(texture),
+        debug === "normals"
+          ? new THREE.MeshNormalMaterial({ flatShading: true })
+          : paperMaterial(texture),
         outlineMaterial(3),
       );
       if (disposed) {
@@ -117,7 +121,7 @@ export default function SpikeClient() {
       cancelAnimationFrame(frame);
       host.replaceChildren();
     };
-  }, [seed, frozen, speed]);
+  }, [seed, frozen, speed, debug]);
 
   return (
     <div

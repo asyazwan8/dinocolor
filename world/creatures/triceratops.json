@@ -2,7 +2,7 @@
   "slug": "triceratops",
   "mesh": "/assets/dino/triceratops/creature.bin",
   "vertices": 44352,
-  "triangles": 91312,
+  "triangles": 90668,
   "layout": {
     "position": {
       "offset": 0,
@@ -26,7 +26,7 @@
     },
     "index": {
       "offset": 2483712,
-      "length": 273936
+      "length": 272004
     }
   },
   "bones": [
