@@ -402,7 +402,37 @@ const built = await page.evaluate(
     const boneIndex = [];
     const boneWeight = [];
     const offsets = [];
+    const rootBone = bones.findIndex((bone) => !bone.parent);
+
     for (let v = 0; v < vertexCount; v++) {
+      /**
+       * A vertex may follow at most ONE limb.
+       *
+       * Two limbs in opposite phase pull a shared vertex two ways at once, and the
+       * belly between a pair of legs is full of such vertices. They are seeded to the
+       * body, so the limb-to-limb block above never sees them - but they relay between
+       * the two legs all the same, and end up carrying a third of one and a sixth of
+       * the other. The scrap of belly line they hold then tears away from the rest of
+       * it as the legs pass.
+       *
+       * Splitting a vertex between two limbs is never the right answer, so the weaker
+       * limb's share goes to the thing both of them hang off: the body.
+       */
+      let strongest = -1;
+      for (let b = 0; b < boneCount; b++) {
+        if (!isLimb(b) || weights[v * boneCount + b] <= 0) continue;
+        if (strongest < 0 || weights[v * boneCount + b] > weights[v * boneCount + strongest]) {
+          strongest = b;
+        }
+      }
+      if (strongest >= 0) {
+        for (let b = 0; b < boneCount; b++) {
+          if (!isLimb(b) || b === strongest) continue;
+          weights[v * boneCount + rootBone] += weights[v * boneCount + b];
+          weights[v * boneCount + b] = 0;
+        }
+      }
+
       const ranked = [];
       for (let b = 0; b < boneCount; b++) {
         const w = weights[v * boneCount + b];
@@ -491,22 +521,32 @@ const built = await page.evaluate(
       }
 
       /**
-       * The ink decides who keeps the triangle.
+       * The ink decides who keeps the triangle - by weight, not by a show of hands.
        *
-       * A bridging triangle in the gap between two feet is mostly blank paper, but it
-       * still catches the edge of whatever runs past it - usually the belly line. Hand
-       * it to a limb and that scrap of belly flies off across the gap with the leg,
-       * which is worse than the fold it was meant to cure. So the owner is chosen from
-       * the corners that carry ink: a limb if the ink belongs to one (the nearer limb,
-       * whose pixels are the ones you see at an overlap), and otherwise whatever the
-       * ink does belong to, which for the gaps is the body.
+       * A bridging triangle in the gap between two limbs is mostly blank paper, but it
+       * still catches the edge of whatever runs past it, which near a hip is the belly
+       * line. Handing it to a limb because one inked corner happens to lean that way
+       * sends that scrap of belly flying off with the leg, leaving a notch behind - a
+       * worse artefact than the fold it was meant to cure.
+       *
+       * So the owner is whichever bone holds the most weight across the inked corners.
+       * A scrap of belly stays with the body; an overlap of two limbs goes to the limb
+       * that actually owns the pixels, and `data-z` only breaks a tie.
        */
       const ink = corners.filter((v) => !onPaper[v]);
       const pool = ink.length ? ink : corners;
-      const inkLimbs = [...new Set(pool.map(dominantOf).filter(isLimb))];
-      const owner = inkLimbs.length
-        ? inkLimbs.reduce((a, b) => (bones[b].z > bones[a].z ? b : a))
-        : dominantOf(pool[0]);
+      const held = new Float64Array(boneCount);
+      for (const v of pool) {
+        for (let i = 0; i < MAX_INFLUENCES; i++) {
+          held[boneIndex[v * MAX_INFLUENCES + i]] += boneWeight[v * MAX_INFLUENCES + i];
+        }
+      }
+      let owner = 0;
+      for (let b = 1; b < boneCount; b++) {
+        const better =
+          held[b] > held[owner] || (held[b] === held[owner] && bones[b].z > bones[owner].z);
+        if (better) owner = b;
+      }
       for (let k = 0; k < 3; k++) {
         const v = corners[k];
         const cacheKey = `${v}:${owner}`;

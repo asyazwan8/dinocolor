@@ -183,12 +183,12 @@ describe("the walk cycle", () => {
         const r = area(rest, t);
         if (Math.abs(r) < 1e-6) continue;
         const ratio = area(frame, t) / r;
-        // Bounds set from what the rig actually achieves (0.26 to 2.03 at the worst
-        // triangle, one crease at a rear hip), with room for a gait tweak but not for
-        // a tear. Before the limbs were separated on the sheet this reached -3.8.
+        // Bounds set from what the rig actually achieves (0.69 to 1.32), with room for
+        // a gait tweak but not for a tear. Before the limbs were separated on the sheet
+        // this reached -3.8, and before they were given haunches, 0.26.
         expect(ratio, `triangle ${t / 3} inverted`).toBeGreaterThan(0);
-        expect(ratio, `triangle ${t / 3} collapsed`).toBeGreaterThan(0.15);
-        expect(ratio, `triangle ${t / 3} stretched`).toBeLessThan(3);
+        expect(ratio, `triangle ${t / 3} collapsed`).toBeGreaterThan(0.45);
+        expect(ratio, `triangle ${t / 3} stretched`).toBeLessThan(2);
       }
     }
   });
@@ -221,8 +221,62 @@ describe("limbs stay rigid", () => {
         }
       }
     }
-    // The rig reaches 0.13; it was 0.47 when the legs touched on the sheet.
-    expect(worst, `vertex ${at} is shared between two legs`).toBeLessThan(0.25);
+    // Structurally zero: the build hands any second limb's share to the body, because
+    // two limbs in opposite phase pull a shared vertex two ways at once. It was 0.47
+    // when the legs touched on the sheet.
+    expect(worst, `vertex ${at} is shared between two legs`).toBeLessThan(0.001);
+  });
+
+  it("keeps the hip still while the limb swings", () => {
+    /**
+     * The one that says the leg is a whole limb turning about its hip.
+     *
+     * The contour where a limb meets the body is drawn as a circular arc centred on
+     * its pivot, and a circle turned about its own centre maps onto itself - so ink
+     * at the joint slides ALONG its own curve and never across it. The test is
+     * therefore not "does the hip move" (it moves 42px, tangentially, as it should)
+     * but "does it move off its own contour", which is the distance from the pivot.
+     *
+     * Linear blend skinning lands on the chord rather than the arc, so a couple of
+     * millimetres of radial contraction is its due and the bound allows it. What the
+     * bound refuses is the previous sheet's straight-topped limb, whose corners swung
+     * 38px clean across the belly line and tore the hip open.
+     */
+    const rotation = new Float32Array(rig.bones.length);
+    const out = new Float32Array(vertexCount * 2);
+    let worst = 0;
+    let at = -1;
+
+    for (let b = 0; b < rig.bones.length; b++) {
+      if (!isLeg(b)) continue;
+      rotation.fill(0);
+      rotation[b] = 0.4; // the gait's full swing
+      skinMesh(rig.mesh, skeleton.solve(rotation, 0, 0), out);
+      const pivot = rig.bones[b].pivot;
+
+      for (let v = 0; v < vertexCount; v++) {
+        let held = 0;
+        for (let i = 0; i < influences; i++) {
+          if (boneIndex[v * influences + i] === b) held = boneWeight[v * influences + i];
+        }
+        if (held < 0.2) continue;
+
+        const before = Math.hypot(positions[v * 2] - pivot.x, positions[v * 2 + 1] - pivot.y);
+        if (before > 110) continue; // the joint region, not the far end of the limb
+        const after = Math.hypot(
+          out[v * 2] + root.x - pivot.x,
+          out[v * 2 + 1] + root.y - pivot.y,
+        );
+        if (Math.abs(after - before) > worst) {
+          worst = Math.abs(after - before);
+          at = v;
+        }
+      }
+    }
+
+    expect(at, "no vertex sits in a joint region").toBeGreaterThan(-1);
+    // The rig reaches 1.7px.
+    expect(worst, `vertex ${at} at a hip moved across its own contour`).toBeLessThan(3);
   });
 
   it("binds the lower half of a limb to that limb alone", () => {
@@ -239,9 +293,9 @@ describe("limbs stay rigid", () => {
       }
     }
     expect(at, "no leg vertex sits far enough below a hip to test").toBeGreaterThan(-1);
-    // The rig reaches 0.83 at its weakest, and 0.97 on average.
+    // The rig reaches 0.98 at its weakest.
     expect(weakest, `vertex ${at} in mid-limb is not bound to its own bone`).toBeGreaterThan(
-      0.75,
+      0.9,
     );
   });
 });

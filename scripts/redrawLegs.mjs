@@ -82,10 +82,10 @@ const ERASE_TO = 996;
  * triangle could reach into both. See the assertion in buildRig.mjs.
  */
 const LEGS = [
-  { id: "legRearFar", hipX: 399, footX: 378, footY: 726, top: 56, ankle: 33, flare: 55 },
-  { id: "legFrontFar", hipX: 744, footX: 733, footY: 734, top: 56, ankle: 34, flare: 56 },
-  { id: "legRearNear", hipX: 571, footX: 558, footY: 756, top: 56, ankle: 34, flare: 56 },
-  { id: "legFrontNear", hipX: 916, footX: 928, footY: 752, top: 56, ankle: 34, flare: 56 },
+  { id: "legRearFar", hipX: 399, footX: 381, footY: 716, top: 58, sink: 36, ankle: 46, flare: 57 },
+  { id: "legFrontFar", hipX: 738, footX: 725, footY: 724, top: 58, sink: 36, ankle: 46, flare: 57 },
+  { id: "legRearNear", hipX: 571, footX: 557, footY: 746, top: 58, sink: 36, ankle: 47, flare: 58 },
+  { id: "legFrontNear", hipX: 922, footX: 933, footY: 742, top: 58, sink: 36, ankle: 47, flare: 58 },
 ];
 
 const sourceDataUrl = `data:image/png;base64,${readFileSync(resolve(SOURCE)).toString(
@@ -165,71 +165,73 @@ const png = await page.evaluate(
     ctx.lineWidth = STROKE;
 
     /**
-     * One limb, as an OPEN path: down the back, round the sole, up the front.
+     * One limb: a haunch dome on top, sides falling away from it, a flared foot.
      *
-     * Open on purpose. A closed path would stroke a line straight across the top of
-     * the limb, and there is no such line on a dinosaur - the thigh simply continues
-     * into the body. Filling uses the same path closed, which is what lets a near leg
-     * white out the belly behind it.
+     * The dome is a semicircle of radius `leg.top` centred EXACTLY on the hip pivot,
+     * and it is the whole point of the shape. A circle rotated about its own centre
+     * maps onto itself, so the contour where the limb meets the body slides along its
+     * own curve instead of sweeping across the belly - which is what a straight-topped
+     * limb does, and why the last sheet pulled open at the hip.
+     *
+     * The sides leave the dome VERTICALLY, tangent to it, so they slide along
+     * themselves too and no corner opens where the arc ends. That is why the control
+     * points below each tangent point sit straight below it; moving them sideways is
+     * exactly what would put the notch back.
+     *
+     * This is the joint every 2D puppet rig draws. Spine's asset guidance asks for "an
+     * area as close to a circle as possible where the joints overlap"; Live2D's is more
+     * specific, and is what the radius follows - a semicircular joint end split on a
+     * diameter through the pivot, radius equal to half the limb's width.
      */
-    const limb = (leg, backY, frontY) => {
+    const limb = (leg) => {
       const { footX: fx, footY: fy, hipX: hx } = leg;
-      const ankleOf = (hipY) => fy - (fy - hipY) * 0.26;
-      const ab = ankleOf(backY);
-      const af = ankleOf(frontY);
-      ctx.beginPath();
-      ctx.moveTo(hx - leg.top, backY);
-      ctx.bezierCurveTo(
-        hx - leg.top - 3,
-        backY + (ab - backY) * 0.45,
-        fx - leg.ankle - 9,
-        ab - (ab - backY) * 0.3,
-        fx - leg.ankle,
-        ab,
-      );
-      ctx.bezierCurveTo(fx - leg.ankle - 2, fy - 16, fx - leg.flare, fy - 14, fx - leg.flare, fy - 2);
-      ctx.bezierCurveTo(fx - leg.flare * 0.4, fy + 6, fx + leg.flare * 0.4, fy + 6, fx + leg.flare, fy - 2);
-      ctx.bezierCurveTo(fx + leg.flare, fy - 14, fx + leg.ankle + 2, fy - 16, fx + leg.ankle, af);
-      ctx.bezierCurveTo(
-        fx + leg.ankle + 9,
-        af - (af - frontY) * 0.3,
-        hx + leg.top + 3,
-        frontY + (af - frontY) * 0.45,
-        hx + leg.top,
-        frontY,
-      );
-    };
-
-    const draw = (leg) => {
       /**
-       * Each side of the limb ends at the belly's height for ITS OWN column, not the
-       * hip's. The belly slopes, and a limb 120px wide crosses enough of that slope
-       * that a single height leaves one corner poking through the body's outline.
+       * The pivot sits INSIDE the thigh, below the belly, not on it.
+       *
+       * Centred on the belly the circle shows a full semicircle above it and the limb
+       * reads as a skittle - a bulb on a stick. Sinking it leaves only a swell of
+       * haunch proud of the belly, which is what a thigh looks like, and it makes the
+       * body's line meet that swell at a slant instead of square on. The arc is still
+       * a circle about the pivot, so the joint is unchanged.
        */
-      const back = bellyAt(leg.hipX - leg.top) + 4;
-      const front = bellyAt(leg.hipX + leg.top) + 4;
-      limb(leg, back, front);
-      ctx.fillStyle = "#fff";
-      ctx.fill();
-      limb(leg, back, front);
-      ctx.stroke();
+      const hy = bellyAt(hx) + leg.sink;
+      const R = leg.top;
+      const ankleY = fy - (fy - hy) * 0.26;
+      const drop = (ankleY - hy) * 0.45;
+
+      ctx.beginPath();
+      // the haunch, from the back tangent point up over the top to the front one
+      ctx.arc(hx, hy, R, Math.PI, 0, false);
+      // down the front, leaving the dome vertically
+      ctx.bezierCurveTo(hx + R, hy + drop, fx + leg.ankle + 9, ankleY - drop * 0.6, fx + leg.ankle, ankleY);
+      // the foot
+      ctx.bezierCurveTo(fx + leg.ankle + 2, fy - 16, fx + leg.flare, fy - 14, fx + leg.flare, fy - 2);
+      ctx.bezierCurveTo(fx + leg.flare * 0.4, fy + 6, fx - leg.flare * 0.4, fy + 6, fx - leg.flare, fy - 2);
+      ctx.bezierCurveTo(fx - leg.flare, fy - 14, fx - leg.ankle - 2, fy - 16, fx - leg.ankle, ankleY);
+      // back up the rear, arriving at the dome vertically
+      ctx.bezierCurveTo(fx - leg.ankle - 9, ankleY - drop * 0.6, hx - R, hy + drop, hx - R, hy);
+      ctx.closePath();
     };
 
     /**
-     * Legs first, then the belly over the top of them.
+     * The belly first, then the legs over the top of it.
      *
-     * That order is what caps each limb: the belly line lands across the open top of
-     * every leg, so the thigh runs into the body with no line drawn across it - there
-     * is no such line on a dinosaur.
-     *
-     * Most of the belly has to be drawn rather than kept: on the original sheet the
-     * legs covered it, so between them there is simply no line to preserve.
+     * Each haunch rises above the belly and whites out the stretch it covers, so the
+     * belly comes out as SEGMENTS running between the hips rather than one line drawn
+     * across everything. That stops the animal reading as a rail with four table legs
+     * under it - and it is the geometric requirement too, because a straight contour
+     * passing through a pivot cannot rotate cleanly about it.
      */
-    for (const leg of LEGS) draw(leg);
-
     ctx.beginPath();
     through(BELLY);
     ctx.stroke();
+
+    for (const leg of LEGS) {
+      limb(leg);
+      ctx.fillStyle = "#fff";
+      ctx.fill();
+      ctx.stroke();
+    }
 
     return canvas.toDataURL("image/png");
   },
@@ -267,25 +269,29 @@ console.log("\nfor assets/dino/triceratops.svg:\n");
 let z = 3;
 for (const leg of LEGS) {
   z++;
-  const hipY = bellyAt(leg.hipX);
+  const hipY = bellyAt(leg.hipX) + leg.sink;
   /**
-   * The polygon starts just BELOW the belly, never above it.
+   * The polygon covers the HAUNCH as well as the limb, dome and all.
    *
-   * Above the belly is body, and up there the four thighs converge - claiming that
-   * strip for the limbs puts two different limbs within one triangle of each other
-   * however far apart the feet are, which is exactly what the build assertion
-   * refuses. The thigh still moves with the leg: relaxation carries the limb's
-   * weight up across the hip, which is what makes the hip bend rather than hinge.
+   * The dome is the joint: for the hip to hold still while the leg swings, the whole
+   * disc about the pivot has to belong to the leg, so that rotating it turns the disc
+   * onto itself. Claim only the part below the belly and the dome's ink is left
+   * behind by the body, which is the tear this change exists to remove.
+   *
+   * The domes reach about 22px above the belly and sit 172 apart, so they stay well
+   * clear of each other - the build assertion is the check.
    */
-  const top = hipY + 6;
+  const m = 4;
+  const R = leg.top;
   const bottom = leg.footY + 16;
-  const mid = (top + bottom) / 2;
-  const wTop = leg.top + 2;
-  const wMid = (leg.top + leg.ankle) / 2 + 2;
-  const wFoot = leg.flare + 2;
+  const mid = (hipY + bottom) / 2;
+  const wMid = (leg.top + leg.ankle) / 2 + m;
+  const wFoot = leg.flare + m;
   const points = [
-    [leg.hipX - wTop, top],
-    [leg.hipX + wTop, top],
+    [leg.hipX - R - m, hipY],
+    [leg.hipX - R * 0.72, hipY - R - m],
+    [leg.hipX + R * 0.72, hipY - R - m],
+    [leg.hipX + R + m, hipY],
     [leg.footX + wMid, mid],
     [leg.footX + wFoot, bottom],
     [leg.footX - wFoot, bottom],
@@ -294,6 +300,6 @@ for (const leg of LEGS) {
     .map(([x, y]) => `${cx(x)},${cy(y)}`)
     .join(" ");
   console.log(
-    `    <polygon id="part-${leg.id}" data-parent="body" data-pivot="${cx(leg.hipX)},${cy(hipY - 8)}" data-z="${z}"\n      points="${points}"/>\n`,
+    `    <polygon id="part-${leg.id}" data-parent="body" data-pivot="${cx(leg.hipX)},${cy(hipY)}" data-z="${z}"\n      points="${points}"/>\n`,
   );
 }
