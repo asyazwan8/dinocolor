@@ -1,0 +1,104 @@
+{
+  "slug": "triceratops",
+  "mesh": "/assets/dino/triceratops/creature.bin",
+  "vertices": 44352,
+  "triangles": 91312,
+  "layout": {
+    "position": {
+      "offset": 0,
+      "length": 133056
+    },
+    "normal": {
+      "offset": 532224,
+      "length": 133056
+    },
+    "uv": {
+      "offset": 1064448,
+      "length": 88704
+    },
+    "skinIndex": {
+      "offset": 1419264,
+      "length": 177408
+    },
+    "skinWeight": {
+      "offset": 1774080,
+      "length": 177408
+    },
+    "index": {
+      "offset": 2483712,
+      "length": 273936
+    }
+  },
+  "bones": [
+    {
+      "id": "legRearFar",
+      "parent": "body",
+      "head": {
+        "x": 563,
+        "y": -513,
+        "z": -88
+      }
+    },
+    {
+      "id": "legFrontFar",
+      "parent": "body",
+      "head": {
+        "x": 836,
+        "y": -475,
+        "z": -88
+      }
+    },
+    {
+      "id": "legRearNear",
+      "parent": "body",
+      "head": {
+        "x": 447,
+        "y": -482,
+        "z": 88
+      }
+    },
+    {
+      "id": "legFrontNear",
+      "parent": "body",
+      "head": {
+        "x": 727,
+        "y": -504,
+        "z": 88
+      }
+    },
+    {
+      "id": "body",
+      "parent": null,
+      "head": {
+        "x": 560,
+        "y": -390,
+        "z": 0
+      }
+    },
+    {
+      "id": "head",
+      "parent": "body",
+      "head": {
+        "x": 718,
+        "y": -420,
+        "z": 0
+      }
+    }
+  ],
+  "footDrop": 282,
+  "extent": {
+    "left": -483,
+    "right": 572
+  },
+  "artwork": {
+    "src": "/assets/dino/triceratops.png",
+    "w": 1085.7142857142858,
+    "h": 800,
+    "x": 57.14285714285711,
+    "y": 0
+  },
+  "texture": {
+    "w": 1200,
+    "h": 800
+  }
+}
