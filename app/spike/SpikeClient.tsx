@@ -8,6 +8,8 @@ import { compositeCreature } from "@/world/composite";
 import { makeDemoColouring } from "@/world/demo";
 import type { Rig } from "@/world/types";
 import { makeCreature, type CreatureData } from "@/world3d/creature";
+import { projectDrawing } from "@/world3d/project";
+import { makeRigged } from "@/world3d/rigged";
 import { outlineMaterial, paperMaterial } from "@/world3d/toon";
 import { Walk } from "@/world3d/walk";
 
@@ -23,6 +25,9 @@ import { Walk } from "@/world3d/walk";
  *   ?phase=<r>   freeze at one point in the stride, radians
  *   ?speed=<n>   0 stands still, 1 is a normal walking pace
  *   ?bare=1      no valley behind, for judging the silhouette on its own
+ *   ?debug=normals  paint by normal, where a fold in the mesh is unmistakable
+ *   ?model=fox   a rigged, hand-animated quadruped instead of the inflated drawing
+ *   ?t=<s>       freeze that model's walk clip at a moment, seconds
  */
 export default function SpikeClient() {
   const params = useSearchParams();
@@ -34,6 +39,9 @@ export default function SpikeClient() {
   const bare = params.get("bare") === "1";
   /** ?debug=normals paints the surface by its normals, where a fold is unmistakable. */
   const debug = params.get("debug");
+  /** A modelled, animated creature rather than one inflated from the drawing. */
+  const model = params.get("model");
+  const frozenTime = params.get("t");
 
   useEffect(() => {
     const host = hostRef.current;
@@ -59,6 +67,7 @@ export default function SpikeClient() {
       // one canonical texture pixel, and the camera looks straight down the view axis
       // the drawing was made along.
       const { w, h } = rigData.texture;
+      const root = { y: 390 };
       const camera = new THREE.OrthographicCamera(0, w, 0, -h, -2000, 2000);
       const fit = () => {
         const width = host.clientWidth;
@@ -80,21 +89,53 @@ export default function SpikeClient() {
       const texture = new THREE.CanvasTexture(sheet);
       texture.colorSpace = THREE.SRGBColorSpace;
 
-      const creature = await makeCreature(
-        creatureData as CreatureData,
+      const skin =
         debug === "normals"
           ? new THREE.MeshNormalMaterial({ flatShading: true })
-          : paperMaterial(texture),
-        outlineMaterial(6),
-      );
-      if (disposed) {
-        renderer.dispose();
-        return;
-      }
-      scene.add(creature.group);
+          : paperMaterial(texture);
 
-      const walk = new Walk(creatureData as CreatureData, creature.bones);
-      if (frozen !== null) walk.setPhase(Number(frozen) || 0, speed);
+      // Two creatures, one question. The inflated one is the drawing given depth, with
+      // a leg that is a single bone on a hinge. The rigged one is a model an animator
+      // keyed, wearing the drawing as paint. Only the motion differs, because both go
+      // through the same materials and the same outline.
+      let rigged: Awaited<ReturnType<typeof makeRigged>> | null = null;
+      let walk: Walk | null = null;
+
+      if (model) {
+        rigged = await makeRigged(
+          `/assets/models/${model}.glb`,
+          skin,
+          outlineMaterial(6),
+          {
+            length: rigData.artwork.w,
+            // Standing exactly where the inflated creature stands, so switching between
+            // them changes the animal and nothing else.
+            feetY: -(root.y + creatureData.footDrop),
+            centreX: rigData.artwork.x + rigData.artwork.w / 2,
+          },
+        );
+        if (disposed) {
+          renderer.dispose();
+          return;
+        }
+        projectDrawing(rigged.mesh.geometry, rigData.artwork, rigData.texture);
+        scene.add(rigged.group);
+        rigged.play("Walk", speed);
+        if (frozenTime !== null) rigged.mixer.setTime(Number(frozenTime) || 0);
+      } else {
+        const creature = await makeCreature(
+          creatureData as CreatureData,
+          skin,
+          outlineMaterial(6),
+        );
+        if (disposed) {
+          renderer.dispose();
+          return;
+        }
+        scene.add(creature.group);
+        walk = new Walk(creatureData as CreatureData, creature.bones);
+        if (frozen !== null) walk.setPhase(Number(frozen) || 0, speed);
+      }
 
       const onResize = () => fit();
       window.addEventListener("resize", onResize);
@@ -104,7 +145,11 @@ export default function SpikeClient() {
         if (disposed) return;
         const dt = Math.min(0.05, (now - last) / 1000);
         last = now;
-        if (frozen === null) walk.advance(dt, speed);
+        if (rigged) {
+          if (frozenTime === null) rigged.mixer.update(dt);
+        } else if (frozen === null) {
+          walk?.advance(dt, speed);
+        }
         renderer.render(scene, camera);
         frame = requestAnimationFrame(tick);
       };
@@ -121,7 +166,7 @@ export default function SpikeClient() {
       cancelAnimationFrame(frame);
       host.replaceChildren();
     };
-  }, [seed, frozen, speed, debug]);
+  }, [seed, frozen, speed, debug, model, frozenTime]);
 
   return (
     <div

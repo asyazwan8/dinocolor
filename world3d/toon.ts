@@ -26,10 +26,24 @@ export function paperMaterial(map: Texture): MeshBasicMaterial {
  * The push happens before skinning, so the hull travels with the pose rather than
  * peeling off it.
  */
-export function outlineMaterial(width: number): MeshBasicMaterial {
-  const material = new MeshBasicMaterial({ color: 0x191919, side: BackSide });
+/** A material that carries its own width, so it can be rescaled after it is built. */
+export type OutlineMaterial = MeshBasicMaterial & { outlineWidth: { value: number } };
+
+/**
+ * @param width in the mesh's OWN units. That is canonical pixels for a creature
+ *   inflated from the drawing, and something else entirely for a model that arrived at
+ *   whatever scale its author chose - a fox about one unit long turns a width of six
+ *   into a hull a thousand times its own size. `setOutlineWidth` exists for that.
+ */
+export function outlineMaterial(width: number): OutlineMaterial {
+  const outlineWidth = { value: width };
+  const material = new MeshBasicMaterial({
+    color: 0x191919,
+    side: BackSide,
+  }) as OutlineMaterial;
+  material.outlineWidth = outlineWidth;
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.outlineWidth = { value: width };
+    shader.uniforms.outlineWidth = outlineWidth;
     shader.vertexShader = shader.vertexShader
       .replace("void main() {", "uniform float outlineWidth;\nvoid main() {")
       .replace(
